@@ -17,6 +17,7 @@ from mcmap.model import (
     MINECRAFT_VERSION,
     coerce_int,
     err,
+    generation_fingerprint,
     new_id,
     new_project,
     now_iso,
@@ -29,6 +30,22 @@ from mcmap.store import ProjectStore, StoreError
 
 def _fail(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"ok": False, "errors": [err(code, message)]})
+
+
+def _public_project(project: dict) -> dict:
+    body = dict(project)
+    body["generationFingerprint"] = generation_fingerprint(project)
+    return body
+
+
+def _cached_generation(project: dict, directory: Path) -> dict | None:
+    path = directory / "cache" / "last_generate.json"
+    if not path.is_file():
+        return None
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("generated") and document.get("fingerprint") == generation_fingerprint(project):
+        return document
+    return None
 
 
 def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
@@ -95,7 +112,7 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
         if errors:
             return JSONResponse(status_code=422, content={"ok": False, "errors": errors})
         store.save(project)
-        return {"ok": True, "project": project}
+        return {"ok": True, "project": _public_project(project)}
 
     @app.post("/api/projects/import-example")
     def import_example():
@@ -107,12 +124,12 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
         if errors:
             store.delete(project["id"])
             return JSONResponse(status_code=422, content={"ok": False, "errors": errors})
-        return {"ok": True, "project": project}
+        return {"ok": True, "project": _public_project(project)}
 
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: str):
         try:
-            return {"ok": True, "project": store.load(project_id)}
+            return {"ok": True, "project": _public_project(store.load(project_id))}
         except StoreError as exc:
             status = 404 if exc.code == "not_found" else 400
             return _fail(status, exc.code, exc.message)
@@ -140,7 +157,7 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
         except StoreError as exc:
             status = 404 if exc.code == "not_found" else 400
             return _fail(status, exc.code, exc.message)
-        return {"ok": True, "project": result["project"], "results": result["results"]}
+        return {"ok": True, "project": _public_project(result["project"]), "results": result["results"]}
 
     @app.post("/api/projects/{project_id}/assets")
     async def upload_asset(project_id: str, file: UploadFile = File(...), caption: str = Form("")):
@@ -241,13 +258,16 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
     @app.get("/api/projects/{project_id}/generation")
     def generation_status(project_id: str):
         try:
+            project = store.load(project_id)
             directory = store.project_dir(project_id)
         except StoreError as exc:
-            return _fail(400, exc.code, exc.message)
-        path = directory / "cache" / "last_generate.json"
-        if not path.is_file():
-            return {"ok": True, "generated": False}
-        return {"ok": True, **json.loads(path.read_text(encoding="utf-8"))}
+            status = 404 if exc.code == "not_found" else 400
+            return _fail(status, exc.code, exc.message)
+        document = _cached_generation(project, directory)
+        if document is None:
+            stale = (directory / "cache" / "last_generate.json").is_file()
+            return {"ok": True, "generated": False, "stale": stale}
+        return {"ok": True, **document, "stale": False}
 
     @app.get("/api/projects/{project_id}/preview")
     def preview(project_id: str, mode: str = "topdown"):
@@ -273,10 +293,13 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
     @app.get("/api/projects/{project_id}/mesh")
     def mesh(project_id: str):
         try:
-            path = store.project_dir(project_id) / "cache" / "mesh.json"
+            project = store.load(project_id)
+            directory = store.project_dir(project_id)
         except StoreError as exc:
-            return _fail(400, exc.code, exc.message)
-        if not path.is_file():
+            status = 404 if exc.code == "not_found" else 400
+            return _fail(status, exc.code, exc.message)
+        path = directory / "cache" / "mesh.json"
+        if _cached_generation(project, directory) is None or not path.is_file():
             return _fail(409, "not_generated", "Generate the map before opening the 3D preview.")
         return FileResponse(path, media_type="application/json")
 

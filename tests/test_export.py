@@ -84,6 +84,139 @@ def test_reader_does_not_import_writer():
         assert all("writer" not in name for name in imported)
 
 
+def _unpack_longs(values, bits: int, count: int) -> list[int]:
+    mask = (1 << bits) - 1
+    per = 64 // bits
+    longs = []
+    for item in values:
+        item = int(item)
+        if item < 0:
+            item += 1 << 64
+        longs.append(item)
+    unpacked = []
+    for index in range(count):
+        long_index = index // per
+        shift = (index % per) * bits
+        unpacked.append((longs[long_index] >> shift) & mask)
+    return unpacked
+
+
+def _read_chunk_nbt(world_dir: Path, x: int, z: int):
+    import io
+    import zlib
+
+    from nbtlib import File
+
+    cx = x >> 4
+    cz = z >> 4
+    path = world_dir / "region" / f"r.{cx >> 5}.{cz >> 5}.mca"
+    data = path.read_bytes()
+    local = (cx & 31) + (cz & 31) * 32
+    entry = int.from_bytes(data[local * 4 : local * 4 + 4], "big")
+    offset = (entry >> 8) * 4096
+    length = int.from_bytes(data[offset : offset + 4], "big")
+    assert data[offset + 4] == 2
+    raw = zlib.decompress(data[offset + 5 : offset + 4 + length])
+    return File.parse(io.BytesIO(raw))
+
+
+def _section_indices(states) -> tuple[list[str], list[int]]:
+    palette = [str(item["Name"]) for item in states["palette"]]
+    if len(palette) == 1 or "data" not in states:
+        return palette, [0] * 4096
+    bits = max(4, (len(palette) - 1).bit_length())
+    return palette, _unpack_longs(states["data"], bits, 4096)
+
+
+def _stored_heightmaps(chunk) -> tuple[list[int], list[int]]:
+    return (
+        _unpack_longs(chunk["Heightmaps"]["WORLD_SURFACE"], 9, 256),
+        _unpack_longs(chunk["Heightmaps"]["MOTION_BLOCKING"], 9, 256),
+    )
+
+
+def _column_blocks(chunk, x: int, z: int) -> dict[int, str]:
+    names: dict[int, str] = {}
+    local_x = x & 15
+    local_z = z & 15
+    for section in chunk["sections"]:
+        palette, indices = _section_indices(section["block_states"])
+        base_y = int(section["Y"]) * 16
+        for index, palette_index in enumerate(indices):
+            if (index & 15) != local_x or ((index >> 4) & 15) != local_z:
+                continue
+            names[base_y + (index >> 8)] = palette[palette_index]
+    return names
+
+
+def _first_available(column: dict[int, str], predicate) -> int:
+    """Minecraft stores the Y above the highest matching block, offset from minY -64."""
+    matches = [y for y, name in column.items() if predicate(name)]
+    if not matches:
+        return 0
+    return (max(matches) + 1) - (-64)
+
+
+def test_heightmaps_use_minecraft_first_available_block(tmp_path: Path):
+    """Decode chunk NBT directly. Do not ask the repository reader what the values should be."""
+    from mcmap.blocks import load_registry
+
+    registry = load_registry()
+    air = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
+    fluids = {"minecraft:water", "minecraft:lava"}
+
+    def blocks_motion(name: str) -> bool:
+        if name in air:
+            return False
+        return bool(registry.is_solid(name) or name in fluids)
+
+    def check(project: dict, directory: Path, x: int, z: int) -> tuple[int, int, dict[int, str]]:
+        exported = export_world(project, str(directory), str(directory / "dest"))
+        assert exported["validation"]["ok"] is True, exported["validation"]["errors"]
+        chunk = _read_chunk_nbt(Path(exported["worldDir"]), x, z)
+        surface_map, motion_map = _stored_heightmaps(chunk)
+        column = _column_blocks(chunk, x, z)
+        slot = (x & 15) + (z & 15) * 16
+        assert surface_map[slot] == _first_available(column, lambda name: name not in air)
+        assert motion_map[slot] == _first_available(column, blocks_motion)
+        return surface_map[slot], motion_map[slot], column
+
+    planted = _flat()
+    planted["defaultTerrain"]["features"]["vegetation"] = "temperate"
+    planted["defaultTerrain"]["features"]["trees"] = {"kind": "oak", "density": 1}
+    planted_dir = tmp_path / "planted"
+    planted_dir.mkdir()
+    export_world(planted, str(planted_dir), str(planted_dir / "dest"))
+    grass = leaves = None
+    for z in range(-16, 16):
+        for x in range(-16, 16):
+            top = sample_column(planted, str(planted_dir), x, z)["blocks"][-1]["id"]
+            if grass is None and top == "minecraft:short_grass":
+                grass = (x, z)
+            if leaves is None and top == "minecraft:oak_leaves":
+                leaves = (x, z)
+            if grass and leaves:
+                break
+        if grass and leaves:
+            break
+    assert grass is not None and leaves is not None
+    surface, motion, column = check(planted, planted_dir, *grass)
+    assert column[max(y for y, name in column.items() if name == "minecraft:short_grass")] == "minecraft:short_grass"
+    assert surface == motion + 1
+    surface, motion, column = check(planted, planted_dir, *leaves)
+    assert any(name == "minecraft:oak_leaves" for name in column.values())
+    assert surface == motion
+
+    wet = _flat()
+    wet["defaultTerrain"]["terrain"]["baseHeight"] = 40
+    wet["defaultTerrain"]["terrain"]["water"] = True
+    wet_dir = tmp_path / "wet"
+    wet_dir.mkdir()
+    surface, motion, column = check(wet, wet_dir, 12, 12)
+    assert column[62] == "minecraft:water"
+    assert surface == motion == (62 + 1) - (-64)
+
+
 def test_export_regenerates_when_missing(tmp_path: Path):
     project = _flat()
     other = deepcopy(project)

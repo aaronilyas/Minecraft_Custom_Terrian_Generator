@@ -51,6 +51,8 @@ def try_load_columns(project_dir: str) -> dict | None:
         "y_min": int(terrain_meta["yMin"]),
         "y_max": int(terrain_meta["yMax"]),
         "non_region": terrain_meta.get("nonRegion"),
+        "regions": terrain_meta.get("regions"),
+        "spawn": terrain_meta.get("spawn"),
     }
 
 

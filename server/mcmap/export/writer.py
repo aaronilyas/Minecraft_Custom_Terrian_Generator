@@ -110,9 +110,15 @@ def _biomes(local_biome: np.ndarray) -> Compound:
 
 
 def _highest(column: np.ndarray, predicate) -> int:
+    """Return Minecraft's stored heightmap value for one column.
+
+    The chunk array starts at minY, so index ``i`` is world Y ``minY + i``.
+    Minecraft stores the first available block above the highest match:
+    ``(highestY + 1) - minY``, which is ``i + 1``. An empty column stores 0.
+    """
     for index in range(len(column) - 1, -1, -1):
         if predicate(int(column[index])):
-            return index
+            return index + 1
     return 0
 
 

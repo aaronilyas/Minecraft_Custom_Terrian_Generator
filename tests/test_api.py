@@ -108,6 +108,76 @@ def test_reference_image_thumbnail(tmp_path):
     assert missing.json()["errors"][0]["code"] == "unknown_asset"
 
 
+def test_edits_do_not_present_stale_preview_or_mesh(tmp_path):
+    from mcmap.generate.service import generate
+
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/projects",
+        json={"name": "Stale", "width": 32, "depth": 32, "seed": 4, "spawn": {"x": 0, "z": 0}},
+    )
+    assert created.status_code == 200, created.text
+    project = created.json()["project"]
+    assert project["generationFingerprint"]
+    created_region = client.post(
+        f"/api/projects/{project['id']}/operations",
+        json={
+            "operations": [
+                {
+                    "op": "region.create",
+                    "args": {
+                        "name": "Plot",
+                        "color": "#336699",
+                        "shape": {"x": -12, "z": -12, "width": 8, "depth": 8},
+                        "terrain": {"baseHeight": 90, "amplitude": 0, "roughness": 0, "water": False},
+                        "features": {"trees": {"kind": "none", "density": 0}, "vegetation": "none", "ores": False, "caves": False},
+                    },
+                }
+            ]
+        },
+    )
+    assert created_region.status_code == 200, created_region.text
+    project = created_region.json()["project"]
+    region_id = created_region.json()["results"][0]["regionId"]
+    generate(project, str(tmp_path / project["id"]), {"kind": "all"})
+
+    def preview(mode="topdown"):
+        return client.get(f"/api/projects/{project['id']}/preview", params={"mode": mode})
+
+    mesh = client.get(f"/api/projects/{project['id']}/mesh")
+    assert mesh.status_code == 200
+    assert mesh.headers["content-type"].startswith("application/json")
+    assert preview().status_code == 200
+    status = client.get(f"/api/projects/{project['id']}/generation").json()
+    assert status["generated"] is True
+    assert status["stale"] is False
+
+    brief = client.post(
+        f"/api/projects/{project['id']}/operations",
+        json={"operations": [{"op": "region.update", "args": {"id": region_id, "brief": {"text": "Notes only"}}}]},
+    )
+    assert brief.status_code == 200, brief.text
+    assert brief.json()["project"]["generationFingerprint"] == project["generationFingerprint"]
+    assert client.get(f"/api/projects/{project['id']}/mesh").status_code == 200
+    assert preview("isometric").status_code == 200
+
+    moved = client.post(
+        f"/api/projects/{project['id']}/operations",
+        json={"operations": [{"op": "region.move", "args": {"id": region_id, "x": 4, "z": 4}}]},
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["project"]["generationFingerprint"] != project["generationFingerprint"]
+    status = client.get(f"/api/projects/{project['id']}/generation").json()
+    assert status["generated"] is False
+    assert status["stale"] is True
+    stale_mesh = client.get(f"/api/projects/{project['id']}/mesh")
+    assert stale_mesh.status_code == 409
+    assert "heights" not in stale_mesh.text
+    stale_preview = preview()
+    assert stale_preview.status_code == 409
+    assert not stale_preview.headers["content-type"].startswith("image/")
+
+
 def test_blocks_endpoint_rejects_nothing_and_lists_grass(tmp_path):
     client = _client(tmp_path)
     listed = client.get("/api/blocks", params={"q": "grass"})

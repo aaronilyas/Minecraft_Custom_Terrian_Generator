@@ -9,8 +9,8 @@ import numpy as np
 from mcmap.blocks import load_registry
 from mcmap.generate.preview import write_mesh
 from mcmap.generate.storage import cache_dir, load_world, non_region_key, save_columns, try_load_columns
-from mcmap.generate.terrain import Y_MAX, Y_MIN, build_scope_mask, generate_arrays
-from mcmap.model import VANILLA_BIOMES, border_square, generation_fingerprint, now_iso
+from mcmap.generate.terrain import Y_MAX, Y_MIN, build_scope_mask, columns_near_rect, generate_arrays
+from mcmap.model import VANILLA_BIOMES, border_square, generation_fingerprint, generation_inputs, now_iso
 
 AIR = "minecraft:air"
 
@@ -37,6 +37,68 @@ def _compatible(previous: dict, project: dict, block_ids: list[str], biome_ids: 
     )
 
 
+def _changed_rects(old_regions: list, new_regions: list) -> list[dict]:
+    old_by_id = {region["id"]: region for region in old_regions}
+    new_by_id = {region["id"]: region for region in new_regions}
+    shared_old = [region["id"] for region in old_regions if region["id"] in new_by_id]
+    shared_new = [region["id"] for region in new_regions if region["id"] in old_by_id]
+    if shared_old != shared_new:
+        return [region["shape"] for region in old_regions] + [region["shape"] for region in new_regions]
+    rects = []
+    for region in old_regions:
+        current = new_by_id.get(region["id"])
+        if current is None:
+            rects.append(region["shape"])
+        elif current != region:
+            rects.append(region["shape"])
+            rects.append(current["shape"])
+    for region in new_regions:
+        if region["id"] not in old_by_id:
+            rects.append(region["shape"])
+    return rects
+
+
+def _mark_column(mask: np.ndarray, x: int, z: int, min_x: int, min_z: int) -> None:
+    ix = x - min_x
+    iz = z - min_z
+    if 0 <= ix < mask.shape[0] and 0 <= iz < mask.shape[1]:
+        mask[ix, iz] = True
+
+
+def _mark_spawn_columns(mask: np.ndarray, spawn: dict, min_x: int, min_z: int) -> None:
+    sx = int(spawn["x"])
+    sz = int(spawn["z"])
+    for dx in (-1, 0, 1):
+        for dz in (-1, 0, 1):
+            _mark_column(mask, sx + dx, sz + dz, min_x, min_z)
+    _mark_column(mask, sx + 2, sz, min_x, min_z)
+    _mark_column(mask, sx + 3, sz, min_x, min_z)
+
+
+def _expand_partial_mask(project: dict, previous: dict, mask: np.ndarray) -> np.ndarray:
+    """Cover every column a region move, delete, or edit can still affect.
+
+    A partial scope is only an optimization. The saved world is stamped with the
+    final fingerprint, so columns left over from the previous plan must be rebuilt.
+    """
+    old_regions = previous.get("regions")
+    new_regions = generation_inputs(project)["regions"]
+    if not isinstance(old_regions, list) or not isinstance(previous.get("spawn"), dict):
+        return np.ones_like(mask, dtype=bool)
+    if old_regions == new_regions:
+        return mask
+    min_x, min_z, _max_x, _max_z = border_square(project)
+    x_coords = np.arange(min_x, min_x + mask.shape[0], dtype=np.int32)
+    z_coords = np.arange(min_z, min_z + mask.shape[1], dtype=np.int32)
+    expanded = np.array(mask, copy=True)
+    blend = int(project["blendRadius"])
+    for rect in _changed_rects(old_regions, new_regions):
+        expanded |= columns_near_rect(rect, blend, x_coords, z_coords)
+    _mark_spawn_columns(expanded, previous["spawn"], min_x, min_z)
+    _mark_spawn_columns(expanded, project["world"]["spawn"], min_x, min_z)
+    return expanded
+
+
 def generate(project: dict, project_dir: str, scope: dict) -> dict:
     block_ids, biome_ids = _registry_tables()
     mask, requested_full = build_scope_mask(project, scope)
@@ -44,6 +106,8 @@ def generate(project: dict, project_dir: str, scope: dict) -> dict:
     if previous is None or not _compatible(previous, project, block_ids, biome_ids):
         previous = None
         mask = np.ones_like(mask, dtype=bool)
+    elif not requested_full:
+        mask = _expand_partial_mask(project, previous, mask)
     generated = generate_arrays(project, mask, previous, block_ids, biome_ids)
     folder = cache_dir(project_dir)
     folder.mkdir(parents=True, exist_ok=True)
@@ -55,6 +119,8 @@ def generate(project: dict, project_dir: str, scope: dict) -> dict:
         "minZ": generated["min_z"],
         "yMin": generated["y_min"],
         "yMax": generated["y_max"],
+        "regions": generation_inputs(project)["regions"],
+        "spawn": generated["spawn"],
     }
     save_columns(project_dir, generated["blocks"], generated["heights"], generated["biomes"], terrain_meta)
     world = {

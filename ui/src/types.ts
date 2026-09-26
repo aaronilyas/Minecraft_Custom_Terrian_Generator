@@ -54,6 +54,7 @@ export interface Project {
   id: string;
   name: string;
   updatedAt?: string;
+  generationFingerprint?: string;
   blendRadius: number;
   world: {
     width: number;

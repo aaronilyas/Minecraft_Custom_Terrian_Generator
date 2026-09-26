@@ -137,8 +137,8 @@ def _column_records(chunk, registry, errors: list[str]) -> dict[tuple[int, int],
         for local_x in range(16):
             slot = local_x + local_z * 16
             record = columns[(local_x, local_z)]
-            expected_surface = 0 if record["surface"] is None else record["surface"][0] - Y_MIN
-            expected_motion = 0 if record["motion"] is None else record["motion"] - Y_MIN
+            expected_surface = 0 if record["surface"] is None else record["surface"][0] - Y_MIN + 1
+            expected_motion = 0 if record["motion"] is None else record["motion"] - Y_MIN + 1
             if surface_map[slot] != expected_surface or motion_map[slot] != expected_motion:
                 errors.append(
                     f"heightmap mismatch at {cx * 16 + local_x},{cz * 16 + local_z}: "

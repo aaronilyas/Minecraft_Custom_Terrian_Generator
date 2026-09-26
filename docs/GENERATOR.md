@@ -221,7 +221,7 @@ Chunk NBT, one compound per present chunk, zlib-compressed:
 
 Block index inside a section is `x + z*16 + y*256` for local `0..15`. Palette entries are `{Name, Properties}` and Properties is omitted when empty. Property values are strings. If the palette length is 1, omit `data`. Otherwise bits per index is `max(4, ceil(log2(paletteLength)))`. Pack into signed 64-bit longs, `64 // bits` indices each, no index crossing a long boundary. The same packing with no minimum of 4 applies to biomes (64 cells of 4×4×4, index `bx + bz*4 + by*16`). A single biome omits `data`. Use the hard owner's `vanillaBiome` for the cell's center column.
 
-Heightmap values are `highestRelevantY - minY` (`minY` is -64), 9 bits, 7 values per long, 37 longs. `WORLD_SURFACE` is the highest non-air. `MOTION_BLOCKING` is the highest solid or fluid. Leaves count as solid here.
+Heightmap values are 9 bits, 7 values per long, 37 longs. Minecraft stores the first available block above the highest relevant block, as `(highestRelevantY + 1) - minY` (`minY` is -64), or 0 when the column has no matching block. `WORLD_SURFACE` is the highest non-air. `MOTION_BLOCKING` is the highest solid or fluid. Leaves count as solid here.
 
 Region file `r.<cx>>5>.<cz>>5>.mca`: 4096-byte locations, 4096-byte timestamps, then 4096-byte sectors. Location is a big-endian 3-byte sector offset plus a 1-byte sector count. Local index is `(chunk & 31) + (chunkZ & 31) * 32`. Chunk payload is a big-endian length (compressed size + 1), a type byte `2`, then zlib bytes. Empty chunks stay zero in the header.
 

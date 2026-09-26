@@ -171,6 +171,82 @@ def test_distant_region_is_stable_for_full_and_scoped_regeneration(tmp_path: Pat
     assert 0 < scoped["columnsWritten"] < 48 * 48
 
 
+def _mismatches(project: dict, left: Path, right: Path) -> list[tuple[int, int, int, int]]:
+    half = int(project["world"]["border"]["size"]) // 2
+    found = []
+    for z in range(-half, half):
+        for x in range(-half, half):
+            scoped = sample_column(project, str(left), x, z)
+            fresh = sample_column(project, str(right), x, z)
+            if scoped != fresh:
+                found.append((x, z, scoped["surfaceY"], fresh["surfaceY"]))
+    return found
+
+
+def _two_regions() -> tuple[dict, dict, dict]:
+    project = _flat(size=32, seed=11, base=68)
+    project["blendRadius"] = 4
+    region_a = _region(
+        project,
+        "11111111-1111-4111-8111-111111111111",
+        "A",
+        {"x": -16, "z": -16, "width": 8, "depth": 8},
+        110,
+        "minecraft:sand",
+    )
+    region_b = _region(
+        project,
+        "22222222-2222-4222-8222-222222222222",
+        "B",
+        {"x": -8, "z": 4, "width": 8, "depth": 8},
+        74,
+        "minecraft:moss_block",
+    )
+    return project, region_a, region_b
+
+
+def test_scoped_regeneration_after_move_matches_full_generation(tmp_path: Path):
+    project, _region_a, _region_b = _two_regions()
+    moved_dir = tmp_path / "moved"
+    moved_dir.mkdir()
+    generate(project, str(moved_dir), {"kind": "all"})
+    before = sample_column(project, str(moved_dir), -12, -12)
+    moved = deepcopy(project)
+    moved["regions"][0]["shape"] = {"x": 4, "z": -16, "width": 8, "depth": 8}
+    scoped = generate(
+        moved,
+        str(moved_dir),
+        {"kind": "rect", "x": 4, "z": -16, "width": 8, "depth": 8},
+    )
+    fresh_dir = tmp_path / "fresh"
+    fresh_dir.mkdir()
+    generate(moved, str(fresh_dir), {"kind": "all"})
+    assert scoped["fingerprint"] == generation_fingerprint(moved)
+    assert sample_column(moved, str(fresh_dir), -12, -12)["surfaceY"] != before["surfaceY"]
+    mismatches = _mismatches(moved, moved_dir, fresh_dir)
+    assert not mismatches, mismatches[:6]
+    assert 0 < scoped["columnsWritten"] < 32 * 32
+
+
+def test_scoped_regeneration_after_delete_matches_full_generation(tmp_path: Path):
+    project, _region_a, region_b = _two_regions()
+    partial_dir = tmp_path / "partial"
+    partial_dir.mkdir()
+    generate(project, str(partial_dir), {"kind": "all"})
+    before = sample_column(project, str(partial_dir), -12, -12)
+    deleted = deepcopy(project)
+    deleted["regions"] = [region for region in deleted["regions"] if region["id"] == region_b["id"]]
+    scoped = generate(deleted, str(partial_dir), {"kind": "region", "regionId": region_b["id"]})
+    fresh_dir = tmp_path / "fresh"
+    fresh_dir.mkdir()
+    generate(deleted, str(fresh_dir), {"kind": "all"})
+    assert scoped["fingerprint"] == generation_fingerprint(deleted)
+    assert sample_column(deleted, str(fresh_dir), -12, -12)["surfaceY"] != before["surfaceY"]
+    mismatches = _mismatches(deleted, partial_dir, fresh_dir)
+    assert not mismatches, mismatches[:6]
+    assert 0 < scoped["columnsWritten"] < 32 * 32
+
+
 def test_brief_text_does_not_change_blocks(tmp_path: Path):
     project = _flat()
     _region(project, "33333333-3333-4333-8333-333333333333", "Notes", {"x": -8, "z": -8, "width": 8, "depth": 8}, 72)

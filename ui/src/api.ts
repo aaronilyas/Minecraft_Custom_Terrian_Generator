@@ -137,7 +137,7 @@ export const api = {
     return send(projectPath(projectId, `/jobs/${encodeURIComponent(jobId)}`));
   },
 
-  generation(projectId: string): Promise<{ generated?: boolean; warnings?: unknown }> {
+  generation(projectId: string): Promise<{ generated?: boolean; stale?: boolean; warnings?: unknown }> {
     return send(projectPath(projectId, "/generation"));
   },
 

@@ -39,6 +39,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [previewsReady, setPreviewsReady] = useState(false);
   const [previewToken, setPreviewToken] = useState(0);
+  const [shownFingerprint, setShownFingerprint] = useState<string | null>(null);
   const [mesh, setMesh] = useState<Awaited<ReturnType<typeof api.mesh>>>(null);
   const [meshNote, setMeshNote] = useState("Generate the map to raise the relief.");
   const [exportJob, setExportJob] = useState<Job | null>(null);
@@ -49,6 +50,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
   const exportWatch = useRef(0);
   const generateTimer = useRef<number | null>(null);
   const exportTimer = useRef<number | null>(null);
+  const generationEpoch = useRef(0);
 
   const selected = project.regions.find((region) => region.id === selectedId) ?? null;
 
@@ -71,18 +73,33 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
 
   useEffect(() => {
     let cancel = false;
+    const epoch = generationEpoch.current;
     void (async () => {
       try {
         const generation = await api.generation(project.id);
-        if (cancel || !generation.generated) return;
+        if (cancel || epoch !== generationEpoch.current) return;
+        if (!generation.generated) {
+          setPreviewsReady(false);
+          setShownFingerprint(null);
+          setMesh(null);
+          setWarnings([]);
+          setGenerateStatus(generation.stale ? "Out of date" : "Not generated yet");
+          setMeshNote(
+            generation.stale
+              ? "Terrain is out of date. Generate again to refresh the preview."
+              : "Generate the map to raise the relief.",
+          );
+          return;
+        }
         setWarnings(textList(generation.warnings));
         setGenerateStatus("Finished");
         setPreviewsReady(true);
-        setPreviewToken(1);
+        setShownFingerprint(project.generationFingerprint ?? null);
+        setPreviewToken((token) => token + 1);
         const meshData = await api.mesh(project.id);
-        if (cancel) return;
+        if (cancel || epoch !== generationEpoch.current) return;
         setMesh(meshData);
-        if (meshData) setMeshNote("");
+        setMeshNote(meshData ? "" : "The height mesh is not available yet.");
       } catch (caught) {
         if (cancel) return;
         const message = errorMessage(caught);
@@ -93,7 +110,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
     return () => {
       cancel = true;
     };
-  }, [project.id]);
+  }, [project.id, project.generationFingerprint]);
 
   function fail(message: string) {
     setError(message);
@@ -312,16 +329,18 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
       fail(job.error || job.message || "Generate failed.");
       return;
     }
+    generationEpoch.current += 1;
     setGenerateStatus(job.message || "Finished");
     setWarnings(textList(job.result?.warnings));
-    setPreviewsReady(true);
-    setPreviewToken((token) => token + 1);
     setError(null);
     setSaveStatus("Saved");
     try {
       const [fresh, meshData] = await Promise.all([api.getProject(project.id), api.mesh(project.id)]);
       if (!mounted.current) return;
       onProject(fresh.project);
+      setShownFingerprint(fresh.project.generationFingerprint ?? null);
+      setPreviewsReady(true);
+      setPreviewToken((token) => token + 1);
       setMesh(meshData);
       setMeshNote(meshData ? "" : "The height mesh is not available yet.");
     } catch (caught) {
@@ -395,6 +414,10 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
     setError(null);
   }
 
+  const previewsVisible =
+    previewsReady && shownFingerprint !== null && shownFingerprint === (project.generationFingerprint ?? null);
+  const outOfDate = shownFingerprint !== null && shownFingerprint !== (project.generationFingerprint ?? null);
+  const visibleMesh = previewsVisible ? mesh : null;
   const previewSrc = (mode: "topdown" | "isometric") =>
     `/api/projects/${project.id}/preview?mode=${mode}&v=${previewToken}`;
 
@@ -538,7 +561,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
               Export world
             </button>
           </div>
-          <p data-testid="generate-status">{generateStatus}</p>
+          <p data-testid="generate-status">{outOfDate ? "Out of date" : generateStatus}</p>
           <ul data-testid="generate-warnings" className="warnings">
             {warnings.map((warning, index) => (
               <li key={`${warning}-${index}`}>{warning}</li>
@@ -549,7 +572,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
               <img
                 data-testid="preview-topdown"
                 alt="Top-down preview"
-                {...(previewsReady ? { src: previewSrc("topdown") } : {})}
+                {...(previewsVisible ? { src: previewSrc("topdown") } : {})}
               />
               <figcaption className="note">Top down</figcaption>
             </figure>
@@ -557,12 +580,18 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
               <img
                 data-testid="preview-isometric"
                 alt="Isometric preview"
-                {...(previewsReady ? { src: previewSrc("isometric") } : {})}
+                {...(previewsVisible ? { src: previewSrc("isometric") } : {})}
               />
               <figcaption className="note">Isometric</figcaption>
             </figure>
           </div>
-          <Preview3D mesh={mesh} blocks={blocks} note={meshNote} />
+          <Preview3D
+            mesh={visibleMesh}
+            blocks={blocks}
+            note={
+              outOfDate ? "Terrain is out of date. Generate again to refresh the preview." : meshNote
+            }
+          />
           <div data-testid="export-result">
             {exportJob?.status === "running" ? <p>{exportJob.message || "Running"}</p> : null}
             {exportJob?.status === "error" ? <p>{exportJob.error || exportJob.message}</p> : null}

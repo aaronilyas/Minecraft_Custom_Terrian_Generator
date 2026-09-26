@@ -15,7 +15,7 @@ npm install --prefix ui
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:8765. Projects are stored in `data/projects/`.
+Open http://127.0.0.1:5173. The API listens on http://127.0.0.1:8765. Projects are stored in `data/projects/`. Stopping `npm run dev` stops both the UI and the API.
 
 ```bash
 .venv/bin/pytest -q
