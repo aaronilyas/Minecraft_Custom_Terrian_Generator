@@ -148,7 +148,10 @@ export function AgentPanel({ projectId, onProjectChanged, onError }: AgentPanelP
   return (
     <section className="panel">
       <h2>Agent</h2>
-      <p className="note">The agent edits this map only through the studio command. Reference images are included.</p>
+      <p className="note">The agent edits this map only through the studio command. Briefs are text. Reference images are included as files.</p>
+      <p className="note" data-testid="agent-image-note">
+        {session?.imageNote || chosen?.imageNote || "Image understanding is reported by the agent after the session starts."}
+      </p>
       <label>
         Agent
         <select data-testid="agent-select" value={agentId} onChange={(event) => setAgentId(event.target.value)}>

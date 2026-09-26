@@ -75,11 +75,11 @@ def _check_properties(palette: list[dict], registry, errors: list[str]) -> None:
             errors.append(f"properties for {entry['name']} are {entry['properties']}, expected {expected}")
 
 
-def _read_region_chunks(path: Path) -> list:
+def _iter_region_chunks(path: Path):
+    """Yield one parsed chunk at a time so a large region is not held all at once."""
     data = path.read_bytes()
     if len(data) < 8192:
         raise ValueError(f"{path.name} header is truncated")
-    chunks = []
     for index in range(1024):
         location = int.from_bytes(data[index * 4 : index * 4 + 4], "big")
         if location == 0:
@@ -94,8 +94,11 @@ def _read_region_chunks(path: Path) -> list:
         if compression != 2:
             raise ValueError(f"{path.name} chunk {index} compression is {compression}")
         raw = zlib.decompress(blob[5 : 4 + length])
-        chunks.append(File.parse(io.BytesIO(raw)))
-    return chunks
+        yield File.parse(io.BytesIO(raw))
+
+
+def _read_region_chunks(path: Path) -> list:
+    return list(_iter_region_chunks(path))
 
 
 def _column_records(chunk, registry, errors: list[str]) -> dict[tuple[int, int], dict]:
@@ -187,34 +190,44 @@ def validate_world(world_dir: str) -> dict:
     registry = load_registry()
     samples = []
     chunk_count = 0
+    # Small worlds keep every column in the report. Larger worlds still check every
+    # chunk and heightmap, and keep spawn, corners, and a stride of columns.
+    keep_all = half <= 256
+    stride = 1 if keep_all else 64
+    spawn = result["spawn"] or {"x": 0, "y": 0, "z": 0}
     region_dir = root / "region"
     paths = sorted(region_dir.glob("*.mca")) if region_dir.is_dir() else []
     if not paths:
         errors.append("no region files")
     for path in paths:
         try:
-            chunks = _read_region_chunks(path)
+            for chunk in _iter_region_chunks(path):
+                chunk_count += 1
+                try:
+                    columns = _column_records(chunk, registry, errors)
+                except Exception as exc:  # noqa: BLE001 - report the chunk and keep reading
+                    errors.append(f"chunk decode: {exc}")
+                    continue
+                for (x, z), record in columns.items():
+                    if x < -half or x >= half or z < -half or z >= half:
+                        continue
+                    if not keep_all:
+                        near_spawn = abs(x - int(spawn["x"])) <= 2 and abs(z - int(spawn["z"])) <= 2
+                        on_grid = x % stride == 0 and z % stride == 0
+                        corner = x in {int(-half), int(half) - 1} and z in {int(-half), int(half) - 1}
+                        if not (near_spawn or on_grid or corner):
+                            continue
+                    if record["bedrock"] is not None:
+                        samples.append({"x": x, "y": Y_MIN, "z": z, "name": record["bedrock"]})
+                    if record["zero"] is not None:
+                        samples.append({"x": x, "y": 0, "z": z, "name": record["zero"]})
+                    if record["surface"] is not None:
+                        sy, name = record["surface"]
+                        if sy not in (Y_MIN, 0):
+                            samples.append({"x": x, "y": sy, "z": z, "name": name})
         except Exception as exc:  # noqa: BLE001 - one bad region should not hide the rest
             errors.append(f"{path.name}: {exc}")
             continue
-        for chunk in chunks:
-            chunk_count += 1
-            try:
-                columns = _column_records(chunk, registry, errors)
-            except Exception as exc:  # noqa: BLE001 - report the chunk and keep reading
-                errors.append(f"chunk decode: {exc}")
-                continue
-            for (x, z), record in columns.items():
-                if x < -half or x >= half or z < -half or z >= half:
-                    continue
-                if record["bedrock"] is not None:
-                    samples.append({"x": x, "y": Y_MIN, "z": z, "name": record["bedrock"]})
-                if record["zero"] is not None:
-                    samples.append({"x": x, "y": 0, "z": z, "name": record["zero"]})
-                if record["surface"] is not None:
-                    sy, name = record["surface"]
-                    if sy not in (Y_MIN, 0):
-                        samples.append({"x": x, "y": sy, "z": z, "name": name})
     result["chunkCount"] = chunk_count
     if chunk_count <= 0:
         errors.append("no chunks")

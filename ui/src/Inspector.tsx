@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { BIOMES, TREE_KINDS, VEGETATION, draftFromRegion, emptyDraft } from "./plan";
+import { BIOMES, FOOD_KINDS, MASK_KINDS, TERRAIN_STYLES, TREE_FORMS, TREE_KINDS, VEGETATION, draftFromRegion, emptyDraft } from "./plan";
 import type { BlockInfo, Project, Region, RegionDraft } from "./types";
 
 interface InspectorProps {
@@ -255,6 +255,70 @@ export function Inspector({ project, region, blocks, onApply, onUpload, onDelete
           />
           Water
         </label>
+        <label>
+          Style
+          <select data-testid="terrain-style" value={draft.style} disabled={locked} onChange={(event) => update({ style: event.target.value })}>
+            {TERRAIN_STYLES.map((style) => (
+              <option key={style} value={style}>
+                {style}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Ceiling
+          <input data-testid="terrain-ceiling" type="number" min={8} max={320} step={1} value={draft.ceiling} disabled={locked} placeholder="180" onChange={(event) => update({ ceiling: event.target.value })} />
+        </label>
+        <label>
+          Snow line
+          <input data-testid="terrain-snow-line" type="number" step={1} value={draft.snowLine} disabled={locked} placeholder="none" onChange={(event) => update({ snowLine: event.target.value })} />
+        </label>
+        <label>
+          Terrace
+          <input data-testid="terrain-terrace" type="number" min={1} max={16} step={1} value={draft.terrace} disabled={locked} onChange={(event) => update({ terrace: event.target.value })} />
+        </label>
+        <label>
+          Shore
+          <input data-testid="terrain-shore" type="number" min={0} max={48} step={1} value={draft.shore} disabled={locked} onChange={(event) => update({ shore: event.target.value })} />
+        </label>
+        <label>
+          Cliff
+          <input data-testid="terrain-cliff" type="number" min={0} max={48} step={1} value={draft.cliff} disabled={locked} onChange={(event) => update({ cliff: event.target.value })} />
+        </label>
+        <label className="wide">
+          Strata blocks
+          <input data-testid="palette-strata" value={draft.strata} disabled={locked} placeholder="minecraft:orange_terracotta, minecraft:red_terracotta" onChange={(event) => update({ strata: event.target.value })} />
+        </label>
+      </div>
+      <h3>Shape</h3>
+      <p className="note">Rectangle is the bounding box. Ellipse, blob, and polygon own only the organic interior. Later regions still cover earlier ones.</p>
+      <div className="fields">
+        <label>
+          Mask
+          <select data-testid="mask-kind" value={draft.maskKind} disabled={locked} onChange={(event) => update({ maskKind: event.target.value })}>
+            {MASK_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Warp
+          <input data-testid="mask-warp" type="number" min={0} max={320} step={1} value={draft.warp} disabled={locked} onChange={(event) => update({ warp: event.target.value })} />
+        </label>
+        <label>
+          Warp scale
+          <input data-testid="mask-scale" type="number" min={8} max={256} step={1} value={draft.scale} disabled={locked} onChange={(event) => update({ scale: event.target.value })} />
+        </label>
+        <label>
+          Falloff
+          <input data-testid="mask-falloff" type="number" min={0} max={32} step={1} value={draft.falloff} disabled={locked} placeholder="blend" onChange={(event) => update({ falloff: event.target.value })} />
+        </label>
+        <label className="wide">
+          Polygon points
+          <textarea data-testid="mask-points" value={draft.points} disabled={locked || draft.maskKind !== "polygon"} placeholder={"x z\nx z\nx z"} onChange={(event) => update({ points: event.target.value })} />
+        </label>
       </div>
       <h3>Features</h3>
       <div className="fields">
@@ -272,6 +336,16 @@ export function Inspector({ project, region, blocks, onApply, onUpload, onDelete
             {TREE_KINDS.map((kind) => (
               <option key={kind} value={kind}>
                 {kind}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Tree form
+          <select data-testid="feature-tree-form" value={draft.treeForm} disabled={locked} onChange={(event) => update({ treeForm: event.target.value })}>
+            {TREE_FORMS.map((form) => (
+              <option key={form} value={form}>
+                {form}
               </option>
             ))}
           </select>
@@ -326,6 +400,38 @@ export function Inspector({ project, region, blocks, onApply, onUpload, onDelete
             onChange={(event) => update({ caves: event.target.checked })}
           />
           Caves
+        </label>
+        <label>
+          Food
+          <select data-testid="feature-food" value={draft.food} disabled={locked} onChange={(event) => update({ food: event.target.value })}>
+            {FOOD_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="check">
+          <input
+            data-testid="feature-crystals"
+            type="checkbox"
+            checked={draft.crystals}
+            disabled={locked}
+            onChange={(event) => update({ crystals: event.target.checked })}
+          />
+          Ice crystals
+        </label>
+        <label>
+          Crystal density
+          <input data-testid="feature-crystal-density" type="number" min={0} max={1} step={0.01} value={draft.crystalDensity} disabled={locked || !draft.crystals} onChange={(event) => update({ crystalDensity: event.target.value })} />
+        </label>
+        <label>
+          Crystal radius
+          <input data-testid="feature-crystal-radius" type="number" min={1} max={8} step={1} value={draft.crystalRadius} disabled={locked || !draft.crystals} onChange={(event) => update({ crystalRadius: event.target.value })} />
+        </label>
+        <label>
+          Crystal height
+          <input data-testid="feature-crystal-height" type="number" min={2} max={24} step={1} value={draft.crystalHeight} disabled={locked || !draft.crystals} onChange={(event) => update({ crystalHeight: event.target.value })} />
         </label>
       </div>
       <div className="actions">

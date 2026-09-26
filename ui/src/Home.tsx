@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type { ProjectSummary } from "./types";
-import { createProjectError, parseInteger } from "./plan";
+import { createProjectError, parseInteger, storageFor } from "./plan";
 
 interface HomeProps {
   projects: ProjectSummary[];
@@ -25,6 +25,12 @@ export function Home({ projects, error, busy, onCreate, onExample, onOpen }: Hom
     const d = parseInteger(depth);
     if (w === null || d === null) return null;
     return Math.max(w, d);
+  }, [width, depth]);
+  const storage = useMemo(() => {
+    const w = parseInteger(width);
+    const d = parseInteger(depth);
+    if (w === null || d === null) return null;
+    return storageFor(w, d);
   }, [width, depth]);
 
   function submit(event: FormEvent) {
@@ -74,8 +80,8 @@ export function Home({ projects, error, busy, onCreate, onExample, onOpen }: Hom
               data-testid="world-width"
               type="number"
               min={32}
-              max={512}
-              step={16}
+              max={4096}
+              step={1}
               value={width}
               onChange={(event) => setWidth(event.target.value)}
             />
@@ -87,8 +93,8 @@ export function Home({ projects, error, busy, onCreate, onExample, onOpen }: Hom
               data-testid="world-depth"
               type="number"
               min={32}
-              max={512}
-              step={16}
+              max={4096}
+              step={1}
               value={depth}
               onChange={(event) => setDepth(event.target.value)}
             />
@@ -128,8 +134,15 @@ export function Home({ projects, error, busy, onCreate, onExample, onOpen }: Hom
             />
           </label>
         </div>
-        <p className="helper">The border is the square of the larger side, and both sides must be multiples of 16.</p>
-        <p className="note">Border square: {borderSize ?? "—"} blocks. Spawn starts at 0, 0.</p>
+        <p className="helper">
+          Playable size is any integer from 32 to 4096. The world border is the square of the larger side, centered on 0.
+          A 3000×3000 map covers blocks −1500 through 1499. Chunks that cross the border are stored whole; those extra columns stay outside the border.
+        </p>
+        <p className="note">
+          {storage
+            ? `Playable ${storage.playableMin}…${storage.playableMax - 1}. Chunk storage ${storage.storageMin}…${storage.storageMax - 1} (${storage.chunks}×${storage.chunks} chunks, ${storage.edge} edge columns on each side).`
+            : `Border square: ${borderSize ?? "—"} blocks.`}
+        </p>
         <div className="actions">
           <button className="primary" type="submit" data-testid="submit-project" disabled={busy}>
             Create map

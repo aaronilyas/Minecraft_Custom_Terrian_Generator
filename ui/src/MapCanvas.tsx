@@ -90,11 +90,31 @@ function paint(canvas: HTMLCanvasElement, project: Project, selectedId: string |
     const h = shape.depth * scaleY;
     ctx.fillStyle = region.color;
     ctx.globalAlpha = region.id === selectedId ? 0.72 : 0.5;
-    ctx.fillRect(x, y, w, h);
+    ctx.beginPath();
+    const maskKind = region.mask?.kind;
+    if ((maskKind === "ellipse" || maskKind === "blob") && w > 0 && h > 0) {
+      ctx.ellipse(x + w / 2, y + h / 2, Math.abs(w) / 2, Math.abs(h) / 2, 0, 0, Math.PI * 2);
+    } else if (maskKind === "polygon" && region.mask?.points && region.mask.points.length >= 3) {
+      region.mask.points.forEach((point, index) => {
+        const px = toX(point.x);
+        const py = toY(point.z);
+        if (index === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+    } else {
+      ctx.rect(x, y, w, h);
+    }
+    ctx.fill();
     ctx.globalAlpha = 1;
     ctx.lineWidth = region.id === selectedId ? 3 : 1.5;
     ctx.strokeStyle = region.id === selectedId ? "#d4a017" : region.color;
+    ctx.stroke();
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.setLineDash([4, 4]);
     ctx.strokeRect(x, y, w, h);
+    ctx.restore();
     if (w > 28 && h > 16) {
       ctx.font = "14px Palatino, Georgia, serif";
       ctx.lineWidth = 3;

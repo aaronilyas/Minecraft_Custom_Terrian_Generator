@@ -2,6 +2,8 @@ import { ApiError } from "./api";
 import type { AgentInfo, Project, Region, RegionDraft, Shape } from "./types";
 
 export const MAX_SEED = 9007199254740991;
+export const MIN_WORLD = 32;
+export const MAX_WORLD = 4096;
 
 export const BIOMES: { id: string; label: string }[] = [
   { id: "minecraft:plains", label: "Plains" },
@@ -14,7 +16,48 @@ export const BIOMES: { id: string; label: string }[] = [
   { id: "minecraft:beach", label: "Beach" },
   { id: "minecraft:stony_shore", label: "Stony Shore" },
   { id: "minecraft:snowy_plains", label: "Snowy Plains" },
+  { id: "minecraft:birch_forest", label: "Birch Forest" },
+  { id: "minecraft:dark_forest", label: "Dark Forest" },
+  { id: "minecraft:snowy_taiga", label: "Snowy Taiga" },
+  { id: "minecraft:old_growth_spruce_taiga", label: "Old Growth Spruce Taiga" },
+  { id: "minecraft:sparse_jungle", label: "Sparse Jungle" },
+  { id: "minecraft:bamboo_jungle", label: "Bamboo Jungle" },
+  { id: "minecraft:badlands", label: "Badlands" },
+  { id: "minecraft:wooded_badlands", label: "Wooded Badlands" },
+  { id: "minecraft:eroded_badlands", label: "Eroded Badlands" },
+  { id: "minecraft:cold_ocean", label: "Cold Ocean" },
+  { id: "minecraft:frozen_ocean", label: "Frozen Ocean" },
+  { id: "minecraft:lukewarm_ocean", label: "Lukewarm Ocean" },
+  { id: "minecraft:warm_ocean", label: "Warm Ocean" },
+  { id: "minecraft:snowy_slopes", label: "Snowy Slopes" },
+  { id: "minecraft:grove", label: "Grove" },
+  { id: "minecraft:jagged_peaks", label: "Jagged Peaks" },
+  { id: "minecraft:frozen_peaks", label: "Frozen Peaks" },
+  { id: "minecraft:stony_peaks", label: "Stony Peaks" },
+  { id: "minecraft:windswept_hills", label: "Windswept Hills" },
+  { id: "minecraft:windswept_forest", label: "Windswept Forest" },
+  { id: "minecraft:meadow", label: "Meadow" },
 ];
+
+export const TERRAIN_STYLES = ["classic", "rolling", "dunes", "mesa", "plateau", "alpine", "cliff"] as const;
+export const TREE_FORMS = ["classic", "varied", "clustered", "emergent"] as const;
+export const FOOD_KINDS = ["none", "berries", "melon", "mixed"] as const;
+export const MASK_KINDS = ["rect", "ellipse", "blob", "polygon"] as const;
+
+export const CRYSTAL_BLOCKS = [
+  "minecraft:packed_ice",
+  "minecraft:blue_ice",
+  "minecraft:ice",
+  "minecraft:calcite",
+  "minecraft:snow_block",
+];
+
+export const FOOD_BLOCK_IDS: Record<string, string[]> = {
+  none: [],
+  berries: ["minecraft:sweet_berry_bush"],
+  melon: ["minecraft:melon"],
+  mixed: ["minecraft:sweet_berry_bush", "minecraft:melon", "minecraft:pumpkin", "minecraft:sugar_cane"],
+};
 
 export const TREE_KINDS = ["none", "oak", "birch", "spruce", "acacia", "jungle", "cactus"] as const;
 
@@ -71,6 +114,34 @@ export function parseNumber(value: string): number | null {
   const number = Number(trimmed);
   if (!Number.isFinite(number)) return null;
   return number;
+}
+
+export function storageFor(width: number, depth: number): {
+  playableMin: number;
+  playableMax: number;
+  playableSize: number;
+  storageMin: number;
+  storageMax: number;
+  chunks: number;
+  edge: number;
+} | null {
+  if (width < MIN_WORLD || depth < MIN_WORLD || width > MAX_WORLD || depth > MAX_WORLD) return null;
+  const size = Math.max(width, depth);
+  const playableMin = -Math.floor(size / 2);
+  const playableMax = playableMin + size;
+  const chunkMin = Math.floor(playableMin / 16);
+  const chunkMax = Math.floor((playableMax - 1) / 16);
+  const storageMin = chunkMin * 16;
+  const storageMax = (chunkMax + 1) * 16;
+  return {
+    playableMin,
+    playableMax,
+    playableSize: size,
+    storageMin,
+    storageMax,
+    chunks: chunkMax - chunkMin + 1,
+    edge: playableMin - storageMin,
+  };
 }
 
 export function borderSquare(project: Project): { minX: number; minZ: number; size: number } {
@@ -163,6 +234,24 @@ export function emptyDraft(): RegionDraft {
     ores: true,
     caves: true,
     biome: "minecraft:plains",
+    maskKind: "rect",
+    warp: "0",
+    scale: "64",
+    falloff: "",
+    points: "",
+    style: "classic",
+    ceiling: "",
+    snowLine: "",
+    terrace: "4",
+    shore: "0",
+    cliff: "0",
+    strata: "",
+    treeForm: "classic",
+    food: "none",
+    crystals: false,
+    crystalDensity: "0.25",
+    crystalRadius: "4",
+    crystalHeight: "10",
   };
 }
 
@@ -185,7 +274,40 @@ export function draftFromRegion(region: Region): RegionDraft {
     ores: Boolean(region.features.ores),
     caves: Boolean(region.features.caves),
     biome: region.vanillaBiome,
+    maskKind: region.mask?.kind || "rect",
+    warp: String(region.mask?.warp ?? 0),
+    scale: String(region.mask?.scale ?? 64),
+    falloff: region.mask?.falloff == null ? "" : String(region.mask.falloff),
+    points: (region.mask?.points ?? []).map((point) => `${point.x} ${point.z}`).join("\n"),
+    style: region.terrain.style || "classic",
+    ceiling: region.terrain.ceiling == null ? "" : String(region.terrain.ceiling),
+    snowLine: region.terrain.snowLine == null ? "" : String(region.terrain.snowLine),
+    terrace: String(region.terrain.terrace ?? 4),
+    shore: String(region.terrain.shore ?? 0),
+    cliff: String(region.terrain.cliff ?? 0),
+    strata: (region.palette.strata ?? []).join(", "),
+    treeForm: region.features.trees.form || "classic",
+    food: region.features.food || "none",
+    crystals: Boolean(region.features.crystals?.enabled),
+    crystalDensity: String(region.features.crystals?.density ?? 0.25),
+    crystalRadius: String(region.features.crystals?.radius ?? 4),
+    crystalHeight: String(region.features.crystals?.height ?? 10),
   };
+}
+
+export function parsePoints(value: string): { x: number; z: number }[] | null {
+  const points = [];
+  for (const line of value.split(/\n+/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/[\s,]+/);
+    if (parts.length < 2) return null;
+    const x = parseInteger(parts[0]);
+    const z = parseInteger(parts[1]);
+    if (x === null || z === null) return null;
+    points.push({ x, z });
+  }
+  return points;
 }
 
 export function allowedForDraft(region: Region, draft: RegionDraft): string[] {
@@ -196,6 +318,12 @@ export function allowedForDraft(region: Region, draft: RegionDraft): string[] {
     region.palette.water,
     ...(TREE_BLOCKS[draft.trees] ?? []),
     ...(VEGETATION_BLOCKS[draft.vegetation] ?? []),
+    ...(FOOD_BLOCK_IDS[draft.food] ?? []),
+    ...(draft.crystals ? CRYSTAL_BLOCKS : []),
+    ...draft.strata
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
   ];
   return [...new Set([...region.palette.allowed, ...extra])];
 }
@@ -273,9 +401,9 @@ export function createProjectError(input: {
   const spawnX = parseInteger(input.spawnX);
   const spawnZ = parseInteger(input.spawnZ);
   const dimensionOk = (value: number | null) =>
-    value !== null && value % 16 === 0 && value >= 32 && value <= 512;
+    value !== null && value >= MIN_WORLD && value <= MAX_WORLD;
   if (!dimensionOk(width) || !dimensionOk(depth)) {
-    return "Width and depth must be multiples of 16 from 32 to 512.";
+    return "Width and depth must be integers from 32 to 4096.";
   }
   if (seed === null || seed < 0 || seed > MAX_SEED) return "Seed must be an integer from 0 to 2^53-1.";
   if (spawnX === null || spawnZ === null) return "Spawn must be an integer x and z.";

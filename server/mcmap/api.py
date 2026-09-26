@@ -22,6 +22,7 @@ from mcmap.model import (
     new_project,
     now_iso,
     validate_project,
+    world_coverage,
 )
 from mcmap.ops import apply_operations
 from mcmap.paths import examples_dir
@@ -35,6 +36,7 @@ def _fail(status: int, code: str, message: str) -> JSONResponse:
 def _public_project(project: dict) -> dict:
     body = dict(project)
     body["generationFingerprint"] = generation_fingerprint(project)
+    body["coverage"] = world_coverage(project)
     return body
 
 
@@ -63,6 +65,9 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
     app.state.registry = registry
     app.state.locks = defaultdict(threading.Lock)
     app.state.jobs = {}
+    app.state.running = {}
+    app.state.cancel_flags = {}
+    app.state.job_lock = threading.Lock()
     app.state.agent_manager = None
 
     def lock_for(project_id: str) -> threading.Lock:
@@ -193,20 +198,38 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
             return _fail(404, "unknown_asset", "Thumbnail is missing.")
         return FileResponse(path, media_type="image/png")
 
+    def _busy(project_id: str) -> bool:
+        job_id = app.state.running.get(project_id)
+        if not job_id:
+            return False
+        job = app.state.jobs.get(job_id)
+        return bool(job and job["status"] in {"running", "cancelling"})
+
     def _run_job(project_id: str, job: dict, body: dict) -> None:
+        cancel = app.state.cancel_flags.get(job["id"])
+
+        def progress(phase: str, fraction: float, message: str) -> None:
+            job["phase"] = phase
+            job["progress"] = max(0.0, min(1.0, float(fraction)))
+            job["message"] = message
+
         try:
             with lock_for(project_id):
+                if cancel is not None and cancel.is_set():
+                    raise RuntimeError("cancelled")
                 project = store.load(project_id)
                 project_dir = str(store.project_dir(project_id))
                 if job["type"] == "generate":
                     from mcmap.generate.service import generate
 
-                    result = generate(project, project_dir, body.get("scope") or {"kind": "all"})
+                    result = generate(project, project_dir, body.get("scope") or {"kind": "all"}, progress, cancel)
                 else:
                     from mcmap.export.service import export_world
 
                     destination = str(store.project_dir(project_id) / "export")
-                    result = export_world(project, project_dir, destination)
+                    result = export_world(project, project_dir, destination, progress, cancel)
+                if cancel is not None and cancel.is_set():
+                    raise RuntimeError("cancelled")
                 if result.get("spawn"):
                     fresh = store.load(project_id)
                     fresh["world"]["spawn"] = result["spawn"]
@@ -221,8 +244,19 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
             job["status"] = "error"
             job["error"] = f"Required module is not available yet: {exc}"
         except Exception as exc:  # noqa: BLE001 - job status is the user-visible error channel
-            job["status"] = "error"
-            job["error"] = str(exc)
+            if str(exc) == "cancelled" or (cancel is not None and cancel.is_set()):
+                job["status"] = "cancelled"
+                job["error"] = None
+                job["message"] = "Cancelled"
+            else:
+                job["status"] = "error"
+                job["error"] = str(exc)
+                job["message"] = str(exc)
+        finally:
+            with app.state.job_lock:
+                if app.state.running.get(project_id) == job["id"]:
+                    app.state.running.pop(project_id, None)
+            app.state.cancel_flags.pop(job["id"], None)
 
     @app.post("/api/projects/{project_id}/jobs")
     def start_job(project_id: str, body: dict):
@@ -234,18 +268,44 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
         except StoreError as exc:
             status = 404 if exc.code == "not_found" else 400
             return _fail(status, exc.code, exc.message)
-        job = {
-            "id": new_id(),
-            "projectId": project_id,
-            "type": kind,
-            "status": "running",
-            "progress": 0,
-            "message": "Running",
-            "error": None,
-            "result": None,
-        }
-        app.state.jobs[job["id"]] = job
+        with app.state.job_lock:
+            if _busy(project_id):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "ok": False,
+                        "errors": [err("job_busy", "A generate or export job is already running for this project.")],
+                    },
+                )
+            job = {
+                "id": new_id(),
+                "projectId": project_id,
+                "type": kind,
+                "status": "running",
+                "phase": "start",
+                "progress": 0,
+                "message": "Running",
+                "error": None,
+                "result": None,
+            }
+            app.state.jobs[job["id"]] = job
+            app.state.running[project_id] = job["id"]
+            app.state.cancel_flags[job["id"]] = threading.Event()
         threading.Thread(target=_run_job, args=(project_id, job, body), daemon=True).start()
+        return {"ok": True, "job": job}
+
+    @app.post("/api/projects/{project_id}/jobs/{job_id}/cancel")
+    def cancel_job(project_id: str, job_id: str):
+        job = app.state.jobs.get(job_id)
+        if not job or job["projectId"] != project_id:
+            return _fail(404, "not_found", "Job not found.")
+        if job["status"] in {"done", "error", "cancelled"}:
+            return {"ok": True, "job": job}
+        flag = app.state.cancel_flags.get(job_id)
+        if flag is not None:
+            flag.set()
+        job["status"] = "cancelling"
+        job["message"] = "Cancelling"
         return {"ok": True, "job": job}
 
     @app.get("/api/projects/{project_id}/jobs/{job_id}")
@@ -333,6 +393,38 @@ def create_app(repo: Path, projects_root: Path | str) -> FastAPI:
         if not zip_path.is_file():
             return _fail(404, "not_found", "Export archive is missing.")
         return FileResponse(zip_path, media_type="application/zip", filename=zip_path.name)
+
+    @app.get("/api/projects/{project_id}/export")
+    def export_status(project_id: str):
+        try:
+            path = store.project_dir(project_id) / "cache" / "last_export.json"
+        except StoreError as exc:
+            return _fail(400, exc.code, exc.message)
+        if not path.is_file():
+            return {"ok": True, "export": None}
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        validation = meta.get("validation") if isinstance(meta.get("validation"), dict) else {}
+        summary = {
+            "ok": validation.get("ok"),
+            "dataVersion": validation.get("dataVersion"),
+            "levelName": validation.get("levelName"),
+            "spawn": validation.get("spawn"),
+            "borderSize": validation.get("borderSize"),
+            "borderCenterX": validation.get("borderCenterX"),
+            "borderCenterZ": validation.get("borderCenterZ"),
+            "chunkCount": validation.get("chunkCount"),
+            "errors": list(validation.get("errors") or [])[:20],
+        }
+        return {
+            "ok": True,
+            "export": {
+                "ok": meta.get("ok"),
+                "worldDir": meta.get("worldDir"),
+                "dataVersion": meta.get("dataVersion"),
+                "spawn": meta.get("spawn"),
+                "validation": summary,
+            },
+        }
 
     def agents():
         if app.state.agent_manager is None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,11 +23,51 @@ def cache_dir(project_dir: str) -> Path:
     return Path(project_dir) / "cache"
 
 
-def save_columns(project_dir: str, blocks: np.ndarray, heights: np.ndarray, biomes: np.ndarray, terrain_meta: dict) -> None:
+def save_columns(
+    project_dir: str,
+    blocks: np.ndarray | None,
+    heights: np.ndarray,
+    biomes: np.ndarray,
+    terrain_meta: dict,
+    owners: np.ndarray | None = None,
+) -> None:
     folder = cache_dir(project_dir)
     folder.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(folder / "columns.npz", blocks=blocks, heights=heights, biomes=biomes)
-    (folder / "terrain_meta.json").write_text(json.dumps(terrain_meta), encoding="utf-8")
+    payload = {"heights": heights, "biomes": biomes}
+    if blocks is not None:
+        payload["blocks"] = blocks
+    if owners is not None:
+        payload["owners"] = owners
+    partial = folder / "_columns_partial.npz"
+    if partial.exists():
+        partial.unlink()
+    np.savez_compressed(partial, **payload)
+    os.replace(partial, folder / "columns.npz")
+    meta_partial = folder / "_terrain_meta.json"
+    meta_partial.write_text(json.dumps(terrain_meta), encoding="utf-8")
+    os.replace(meta_partial, folder / "terrain_meta.json")
+
+
+def _unpack_columns(data, terrain_meta: dict) -> dict:
+    compact = "blocks" not in data.files
+    return {
+        "blocks": None if compact else np.array(data["blocks"]),
+        "heights": np.array(data["heights"]),
+        "biomes": np.array(data["biomes"]),
+        "owners": np.array(data["owners"]) if "owners" in data.files else None,
+        "compact": compact,
+        "block_ids": list(terrain_meta["blockIds"]),
+        "biome_ids": list(terrain_meta["biomeIds"]),
+        "min_x": int(terrain_meta["minX"]),
+        "min_z": int(terrain_meta["minZ"]),
+        "y_min": int(terrain_meta["yMin"]),
+        "y_max": int(terrain_meta["yMax"]),
+        "non_region": terrain_meta.get("nonRegion"),
+        "regions": terrain_meta.get("regions"),
+        "spawn": terrain_meta.get("spawn"),
+        "spawnPad": terrain_meta.get("spawnPad"),
+        "spawnRequested": terrain_meta.get("spawnRequested"),
+    }
 
 
 def try_load_columns(project_dir: str) -> dict | None:
@@ -37,23 +78,7 @@ def try_load_columns(project_dir: str) -> dict | None:
         return None
     terrain_meta = json.loads(meta_path.read_text(encoding="utf-8"))
     with np.load(col_path) as data:
-        blocks = np.array(data["blocks"])
-        heights = np.array(data["heights"])
-        biomes = np.array(data["biomes"])
-    return {
-        "blocks": blocks,
-        "heights": heights,
-        "biomes": biomes,
-        "block_ids": list(terrain_meta["blockIds"]),
-        "biome_ids": list(terrain_meta["biomeIds"]),
-        "min_x": int(terrain_meta["minX"]),
-        "min_z": int(terrain_meta["minZ"]),
-        "y_min": int(terrain_meta["yMin"]),
-        "y_max": int(terrain_meta["yMax"]),
-        "non_region": terrain_meta.get("nonRegion"),
-        "regions": terrain_meta.get("regions"),
-        "spawn": terrain_meta.get("spawn"),
-    }
+        return _unpack_columns(data, terrain_meta)
 
 
 def load_world(project_dir: str, fingerprint: str) -> dict:
@@ -72,19 +97,9 @@ def load_world(project_dir: str, fingerprint: str) -> dict:
         return cached[1]
     terrain_meta = json.loads(terrain_path.read_text(encoding="utf-8"))
     with np.load(col_path) as data:
-        blocks = np.array(data["blocks"])
-        heights = np.array(data["heights"])
-        biomes = np.array(data["biomes"])
+        unpacked = _unpack_columns(data, terrain_meta)
     world = {
-        "blocks": blocks,
-        "heights": heights,
-        "biomes": biomes,
-        "block_ids": list(terrain_meta["blockIds"]),
-        "biome_ids": list(terrain_meta["biomeIds"]),
-        "min_x": int(terrain_meta["minX"]),
-        "min_z": int(terrain_meta["minZ"]),
-        "y_min": int(terrain_meta["yMin"]),
-        "y_max": int(terrain_meta["yMax"]),
+        **unpacked,
         "meta": meta,
     }
     _SAMPLE_CACHE["world"] = (key, world)

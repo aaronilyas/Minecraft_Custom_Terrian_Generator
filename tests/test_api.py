@@ -1,3 +1,4 @@
+import json
 from io import BytesIO
 
 from fastapi.testclient import TestClient
@@ -184,3 +185,44 @@ def test_blocks_endpoint_rejects_nothing_and_lists_grass(tmp_path):
     ids = [row["id"] for row in listed.json()["blocks"]]
     assert "minecraft:grass_block" in ids
     assert "minecraft:air" not in ids
+
+
+def test_export_status_is_empty_until_saved_and_omits_samples(tmp_path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "Export Status", "width": 32, "depth": 32, "seed": 1}).json()["project"]
+    missing = client.get(f"/api/projects/{project['id']}/export")
+    assert missing.status_code == 200
+    assert missing.json() == {"ok": True, "export": None}
+    cache = tmp_path / project["id"] / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "last_export.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "worldDir": "/tmp/world",
+                "zipPath": "/tmp/world.zip",
+                "dataVersion": 4189,
+                "spawn": {"x": 1, "y": 70, "z": 2},
+                "validation": {
+                    "ok": True,
+                    "dataVersion": 4189,
+                    "levelName": "Export Status",
+                    "spawn": {"x": 1, "y": 70, "z": 2},
+                    "borderSize": 32,
+                    "chunkCount": 4,
+                    "samples": [{"x": 0, "y": -64, "z": 0, "name": "minecraft:bedrock"}],
+                    "errors": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    found = client.get(f"/api/projects/{project['id']}/export")
+    assert found.status_code == 200, found.text
+    body = found.json()["export"]
+    assert body["worldDir"] == "/tmp/world"
+    assert body["dataVersion"] == 4189
+    assert body["validation"]["chunkCount"] == 4
+    assert body["validation"]["borderSize"] == 32
+    assert "samples" not in body["validation"]
+    assert "zipPath" not in body

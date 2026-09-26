@@ -7,10 +7,11 @@ import json
 import numpy as np
 
 from mcmap.blocks import load_registry
-from mcmap.generate.preview import write_mesh
+from mcmap.generate.compact import GenerationCancelled, compute_fields, export_compact, sample_from_fields, spawn_window
+from mcmap.generate.preview import write_mesh, write_preview_images
 from mcmap.generate.storage import cache_dir, load_world, non_region_key, save_columns, try_load_columns
-from mcmap.generate.terrain import Y_MAX, Y_MIN, build_scope_mask, columns_near_rect, generate_arrays
-from mcmap.model import VANILLA_BIOMES, border_square, generation_fingerprint, generation_inputs, now_iso
+from mcmap.generate.terrain import Y_MAX, Y_MIN, _count_chunks, build_scope_mask, columns_near_rect, generate_arrays
+from mcmap.model import VANILLA_BIOMES, border_square, generation_fingerprint, generation_inputs, now_iso, uses_compact_storage, world_coverage
 
 AIR = "minecraft:air"
 
@@ -21,6 +22,8 @@ def _registry_tables() -> tuple[list[str], list[str]]:
 
 
 def _compatible(previous: dict, project: dict, block_ids: list[str], biome_ids: list[str]) -> bool:
+    if previous.get("compact") or previous.get("blocks") is None:
+        return False
     min_x, min_z, max_x, max_z = border_square(project)
     ny = Y_MAX - Y_MIN + 1
     return (
@@ -99,7 +102,17 @@ def _expand_partial_mask(project: dict, previous: dict, mask: np.ndarray) -> np.
     return expanded
 
 
-def generate(project: dict, project_dir: str, scope: dict) -> dict:
+def generate(project: dict, project_dir: str, scope: dict, progress=None, cancel=None) -> dict:
+    if uses_compact_storage(project):
+        return _generate_compact(project, project_dir, scope, progress, cancel)
+    return _generate_voxel(project, project_dir, scope, progress, cancel)
+
+
+def _generate_voxel(project: dict, project_dir: str, scope: dict, progress=None, cancel=None) -> dict:
+    if cancel is not None and cancel.is_set():
+        raise GenerationCancelled()
+    if progress is not None:
+        progress("terrain", 0.1, "Generating terrain")
     block_ids, biome_ids = _registry_tables()
     mask, requested_full = build_scope_mask(project, scope)
     previous = None if requested_full else try_load_columns(project_dir)
@@ -122,7 +135,7 @@ def generate(project: dict, project_dir: str, scope: dict) -> dict:
         "regions": generation_inputs(project)["regions"],
         "spawn": generated["spawn"],
     }
-    save_columns(project_dir, generated["blocks"], generated["heights"], generated["biomes"], terrain_meta)
+    save_columns(project_dir, generated["blocks"], generated["heights"], generated["biomes"], terrain_meta, generated.get("owners"))
     world = {
         "blocks": generated["blocks"],
         "heights": generated["heights"],
@@ -143,6 +156,11 @@ def generate(project: dict, project_dir: str, scope: dict) -> dict:
         "spawnAdjusted": generated["spawnAdjusted"],
         "warnings": generated["warnings"],
         "columnsWritten": generated["columnsWritten"],
+        "spawnChecks": generated.get("spawnChecks"),
+        "spawnPad": generated.get("spawnPad", False),
+        "coverage": world_coverage(project),
+        "storage": "voxel",
+        "previewStep": 1,
         "finishedAt": now_iso(),
     }
     (folder / "last_generate.json").write_text(json.dumps(document), encoding="utf-8")
@@ -153,14 +171,165 @@ def generate(project: dict, project_dir: str, scope: dict) -> dict:
         "spawn": generated["spawn"],
         "spawnAdjusted": generated["spawnAdjusted"],
         "warnings": generated["warnings"],
+        "spawnChecks": generated.get("spawnChecks"),
         "fingerprint": fingerprint,
     }
+
+
+def _compact_compatible(previous: dict, project: dict, block_ids: list[str], biome_ids: list[str]) -> bool:
+    if not previous.get("compact") or previous.get("owners") is None:
+        return False
+    min_x, min_z, max_x, max_z = border_square(project)
+    return (
+        previous.get("non_region") == non_region_key(project)
+        and previous.get("block_ids") == block_ids
+        and previous.get("biome_ids") == biome_ids
+        and int(previous["min_x"]) == min_x
+        and int(previous["min_z"]) == min_z
+        and previous["heights"].shape == (max_x - min_x, max_z - min_z)
+        and previous["owners"].shape == previous["heights"].shape
+    )
+
+
+def _generate_compact(project: dict, project_dir: str, scope: dict, progress=None, cancel=None) -> dict:
+    if cancel is not None and cancel.is_set():
+        raise GenerationCancelled()
+    block_ids, biome_ids = _registry_tables()
+    mask, requested_full = build_scope_mask(project, scope)
+    previous = None if requested_full else try_load_columns(project_dir)
+    if previous is None or not _compact_compatible(previous, project, block_ids, biome_ids):
+        fields = compute_fields(project, block_ids, biome_ids, progress, cancel)
+        mask = np.ones(fields["heights"].shape, dtype=bool)
+    else:
+        fields = {
+            "heights": np.array(previous["heights"], copy=True),
+            "owners": np.array(previous["owners"], copy=True),
+            "biomes": np.array(previous["biomes"], copy=True),
+            "min_x": int(previous["min_x"]),
+            "min_z": int(previous["min_z"]),
+        }
+        if not isinstance(previous.get("regions"), list) or not isinstance(previous.get("spawn"), dict):
+            fields = compute_fields(project, block_ids, biome_ids, progress, cancel)
+            mask = np.ones(fields["heights"].shape, dtype=bool)
+        else:
+            mask = _expand_partial_mask(project, previous, mask)
+            if progress is not None:
+                progress("terrain", 0.2, "Updating changed terrain")
+            _recompute_mask(project, fields, mask, block_ids, biome_ids, cancel)
+    if progress is not None:
+        progress("spawn", 0.7, "Checking spawn")
+    spawned = spawn_window(project, fields, block_ids, biome_ids)
+    folder = cache_dir(project_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    _invalidate(folder)
+    terrain_meta = {
+        "nonRegion": non_region_key(project),
+        "blockIds": block_ids,
+        "biomeIds": biome_ids,
+        "minX": fields["min_x"],
+        "minZ": fields["min_z"],
+        "yMin": Y_MIN,
+        "yMax": Y_MAX,
+        "regions": generation_inputs(project)["regions"],
+        "spawn": spawned["spawn"],
+        "spawnPad": spawned["spawnPad"],
+        "spawnRequested": spawned["requested"],
+        "compact": True,
+    }
+    save_columns(project_dir, None, fields["heights"], fields["biomes"], terrain_meta, fields["owners"])
+    world = {
+        **fields,
+        "block_ids": block_ids,
+        "biome_ids": biome_ids,
+        "y_min": Y_MIN,
+        "y_max": Y_MAX,
+        "compact": True,
+    }
+    write_mesh(project, world, str(folder / "mesh.json"))
+    write_preview_images(project, world, folder, progress, cancel)
+    fingerprint = generation_fingerprint(project)
+    coverage = world_coverage(project)
+    document = {
+        "generated": True,
+        "fingerprint": fingerprint,
+        "spawn": spawned["spawn"],
+        "spawnAdjusted": spawned["spawnAdjusted"],
+        "spawnChecks": spawned["spawnChecks"],
+        "spawnPad": spawned["spawnPad"],
+        "spawnRequested": spawned["requested"],
+        "warnings": spawned["warnings"],
+        "columnsWritten": int(mask.sum()),
+        "chunksWritten": int(coverage["storage"]["chunksX"] * coverage["storage"]["chunksZ"])
+        if bool(mask.all())
+        else _count_chunks(mask, np.arange(fields["min_x"], fields["min_x"] + mask.shape[0]), np.arange(fields["min_z"], fields["min_z"] + mask.shape[1])),
+        "coverage": coverage,
+        "storage": "compact",
+        "previewStep": _preview_step(project),
+        "finishedAt": now_iso(),
+    }
+    _stamp(folder, document)
+    if progress is not None:
+        progress("done", 1, "Finished")
+    return {
+        "ok": True,
+        "columnsWritten": document["columnsWritten"],
+        "chunksWritten": document["chunksWritten"],
+        "spawn": spawned["spawn"],
+        "spawnAdjusted": spawned["spawnAdjusted"],
+        "spawnChecks": spawned["spawnChecks"],
+        "warnings": spawned["warnings"],
+        "fingerprint": fingerprint,
+    }
+
+
+def _recompute_mask(project, fields, mask, block_ids, biome_ids, cancel) -> None:
+    if not np.any(mask):
+        return
+    xs = np.nonzero(mask.any(axis=1))[0]
+    zs = np.nonzero(mask.any(axis=0))[0]
+    x0 = int(fields["min_x"] + int(xs[0]))
+    x1 = int(fields["min_x"] + int(xs[-1]) + 1)
+    z0 = int(fields["min_z"] + int(zs[0]))
+    z1 = int(fields["min_z"] + int(zs[-1]) + 1)
+    updated = compute_fields(project, block_ids, biome_ids, None, cancel, (x0, z0, x1, z1))
+    local = mask[x0 - fields["min_x"] : x1 - fields["min_x"], z0 - fields["min_z"] : z1 - fields["min_z"]]
+    for key in ("heights", "owners", "biomes"):
+        view = fields[key][x0 - fields["min_x"] : x1 - fields["min_x"], z0 - fields["min_z"] : z1 - fields["min_z"]]
+        view[local] = updated[key][local]
+
+
+def _preview_step(project: dict) -> int:
+    from mcmap.generate.preview import mesh_step
+
+    _min_x, _min_z, max_x, _max_z = border_square(project)
+    return mesh_step(max_x - _min_x)
+
+
+def _invalidate(folder) -> None:
+    path = folder / "last_generate.json"
+    path.write_text('{"generated": false}', encoding="utf-8")
+
+
+def _stamp(folder, document: dict) -> None:
+    partial = folder / "_last_generate.json"
+    partial.write_text(json.dumps(document), encoding="utf-8")
+    partial.replace(folder / "last_generate.json")
 
 
 def sample_column(project: dict, project_dir: str, x: int, z: int) -> dict:
     world = load_world(project_dir, generation_fingerprint(project))
     x = int(x)
     z = int(z)
+    if world.get("compact"):
+        meta = world.get("meta") or {}
+        state = {
+            "spawn": meta.get("spawn") or world.get("spawn") or project["world"]["spawn"],
+            "pad": bool(meta.get("spawnPad", world.get("spawnPad"))),
+            "requested": meta.get("spawnRequested") or world.get("spawnRequested") or project["world"]["spawn"],
+        }
+        column = sample_from_fields(project, world, world["block_ids"], world["biome_ids"], x, z, state)
+        column.pop("edge", None)
+        return column
     ix = x - int(world["min_x"])
     iz = z - int(world["min_z"])
     blocks = world["blocks"]

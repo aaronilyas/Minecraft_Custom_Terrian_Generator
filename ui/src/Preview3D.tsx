@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   AmbientLight,
+  BoxGeometry,
   BufferGeometry,
   DirectionalLight,
   Line,
   LineBasicMaterial,
   Mesh,
+  MeshBasicMaterial,
   MeshLambertMaterial,
   PerspectiveCamera,
   Raycaster,
@@ -37,9 +39,10 @@ interface Preview3DProps {
   mesh: MeshData | null;
   blocks: BlockInfo[];
   note: string;
+  spawn?: { x: number; y: number; z: number };
 }
 
-export function Preview3D({ mesh, blocks, note }: Preview3DProps) {
+export function Preview3D({ mesh, blocks, note, spawn }: Preview3DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewRef = useRef<View | null>(null);
   const [readout, setReadout] = useState("");
@@ -78,6 +81,18 @@ export function Preview3D({ mesh, blocks, note }: Preview3DProps) {
         terrain = new Mesh(built.geometry, material);
         terrain.position.copy(built.offset);
         scene.add(terrain);
+        const markerSize = Math.max(mesh.step, 1);
+        if (spawn) {
+          const markerGeometry = new BoxGeometry(markerSize * 1.4, markerSize * 2.4, markerSize * 1.4);
+          const markerMaterial = new MeshBasicMaterial({ color: 0xd4a017 });
+          const marker = new Mesh(markerGeometry, markerMaterial);
+          marker.position.set(spawn.x, spawn.y + markerSize, spawn.z);
+          scene.add(marker);
+          disposables.push(() => {
+            markerGeometry.dispose();
+            markerMaterial.dispose();
+          });
+        }
 
         const northHeights = mesh.heights.slice(0, built.xSamples);
         const northY = (northHeights.length ? Math.max(...northHeights) : mesh.seaLevel) + 0.45;
@@ -155,7 +170,7 @@ export function Preview3D({ mesh, blocks, note }: Preview3DProps) {
       renderer.dispose();
       viewRef.current = null;
     };
-  }, [mesh, blocks]);
+  }, [mesh, blocks, spawn]);
 
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
     const view = viewRef.current;

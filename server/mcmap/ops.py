@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 
 from mcmap.blocks import BlockRegistry
 from mcmap.model import (
     COLOR_RE,
     MAX_SEED,
-    MIN_SIZE,
-    MAX_SIZE,
     VANILLA_BIOMES,
     _is_int,
+    _point_xz,
     coerce_float,
     coerce_int,
     coerce_shape,
+    dimension_message,
+    dimension_ok,
     err,
     is_uuid,
     make_border,
@@ -39,6 +41,8 @@ def _merge_palette(base: dict, patch: dict) -> dict:
             merged[key] = patch[key]
     if "allowed" in patch:
         merged["allowed"] = list(patch["allowed"])
+    if "strata" in patch:
+        merged["strata"] = [] if patch["strata"] is None else list(patch["strata"])
     for key in ("surface", "subsurface", "stone", "water"):
         if merged[key] not in merged["allowed"]:
             merged["allowed"].append(merged[key])
@@ -73,13 +77,55 @@ def _merge_features(base: dict, patch: dict) -> dict:
             if coerced is not None:
                 trees["density"] = coerced
         merged["trees"] = trees
-    for key in ("vegetation", "ores", "caves"):
+    for key in ("vegetation", "ores", "caves", "food"):
         if key in patch:
             value = patch[key]
             if key in {"ores", "caves"} and isinstance(value, str) and value.lower() in {"true", "false"}:
                 value = value.lower() == "true"
             merged[key] = value
+    if "crystals" in patch:
+        if patch["crystals"] is None:
+            merged.pop("crystals", None)
+        elif isinstance(patch["crystals"], dict):
+            crystals = dict(merged.get("crystals") or {})
+            crystals.update(patch["crystals"])
+            for key in ("radius", "height"):
+                if key in crystals:
+                    coerced = coerce_int(crystals[key])
+                    if coerced is not None:
+                        crystals[key] = coerced
+            if "density" in crystals:
+                coerced = coerce_float(crystals["density"])
+                if coerced is not None:
+                    crystals["density"] = coerced
+            if isinstance(crystals.get("enabled"), str) and crystals["enabled"].lower() in {"true", "false"}:
+                crystals["enabled"] = crystals["enabled"].lower() == "true"
+            merged["crystals"] = crystals
     return merged
+
+
+def _normalize_mask(mask: Any) -> tuple[dict | None, dict | None]:
+    if mask is None:
+        return None, None
+    if not isinstance(mask, dict):
+        return None, err("schema", "Mask must be an object.", "mask")
+    normalized = dict(mask)
+    for key in ("warp", "scale", "falloff"):
+        if key in normalized and normalized[key] is not None:
+            coerced = coerce_int(normalized[key])
+            if coerced is not None:
+                normalized[key] = coerced
+    points = normalized.get("points")
+    if isinstance(points, list):
+        coerced_points = []
+        for point in points:
+            px, pz = _point_xz(point)
+            if px is None or pz is None:
+                coerced_points.append(point)
+            else:
+                coerced_points.append({"x": px, "z": pz})
+        normalized["points"] = coerced_points
+    return normalized, None
 
 
 def _find_region(project: dict, region_id: str) -> tuple[int, dict] | None:
@@ -119,20 +165,32 @@ def _apply_world_set_meta(project: dict, args: dict) -> dict:
     width = args.get("width", world["width"])
     depth = args.get("depth", world["depth"])
     if "width" in args or "depth" in args:
-        if (
-            not _is_int(width)
-            or not _is_int(depth)
-            or width % 16
-            or depth % 16
-            or not MIN_SIZE <= width <= MAX_SIZE
-            or not MIN_SIZE <= depth <= MAX_SIZE
-        ):
+        if not dimension_ok(width, depth):
             return {
                 "result": None,
-                "error": err("invalid_dimension", "Width and depth must be multiples of 16 from 32 to 512.", "world"),
+                "error": err("invalid_dimension", dimension_message(), "world"),
             }
         world["width"] = width
         world["depth"] = depth
+    if "defaultTerrain" in args:
+        patch = args["defaultTerrain"]
+        if not isinstance(patch, dict):
+            return {"result": None, "error": err("schema", "defaultTerrain must be an object.", "defaultTerrain")}
+        profile = project["defaultTerrain"]
+        if "vanillaBiome" in patch:
+            profile["vanillaBiome"] = patch["vanillaBiome"]
+        if "palette" in patch:
+            if not isinstance(patch["palette"], dict):
+                return {"result": None, "error": err("schema", "palette must be an object.", "defaultTerrain.palette")}
+            profile["palette"] = _merge_palette(profile["palette"], patch["palette"])
+        if "terrain" in patch:
+            if not isinstance(patch["terrain"], dict):
+                return {"result": None, "error": err("schema", "terrain must be an object.", "defaultTerrain.terrain")}
+            profile["terrain"] = _merge_terrain(profile["terrain"], patch["terrain"])
+        if "features" in patch:
+            if not isinstance(patch["features"], dict):
+                return {"result": None, "error": err("schema", "features must be an object.", "defaultTerrain.features")}
+            profile["features"] = _merge_features(profile["features"], patch["features"])
     if "spawn" in args:
         spawn = args["spawn"]
         if not isinstance(spawn, dict):
@@ -199,6 +257,14 @@ def _new_region(project: dict, args: dict) -> tuple[dict | None, dict | None]:
         if not isinstance(args["features"], dict):
             return None, err("schema", "features must be an object.", "features")
         region["features"] = _merge_features(region["features"], args["features"])
+    if "mask" in args:
+        normalized, error = _normalize_mask(args["mask"])
+        if error:
+            return None, error
+        if normalized is None:
+            region.pop("mask", None)
+        else:
+            region["mask"] = normalized
     if region["vanillaBiome"] not in VANILLA_BIOMES:
         return None, err("schema", "Unsupported vanilla biome.", "vanillaBiome")
     if not isinstance(region["color"], str) or not COLOR_RE.match(region["color"]):
@@ -253,6 +319,14 @@ def _apply_region_update(project: dict, args: dict) -> dict:
         if not isinstance(args["features"], dict):
             return {"result": None, "error": err("schema", "features must be an object.", "features")}
         region["features"] = _merge_features(region["features"], args["features"])
+    if "mask" in args:
+        normalized, error = _normalize_mask(args["mask"])
+        if error:
+            return {"result": None, "error": error}
+        if normalized is None:
+            region.pop("mask", None)
+        else:
+            region["mask"] = normalized
     project["regions"][index] = region
     return {"result": {"op": "region.update", "regionId": region["id"]}, "error": None}
 
@@ -268,9 +342,24 @@ def _apply_region_move(project: dict, args: dict) -> dict:
     if not found:
         return {"result": None, "error": err("unknown_region", "Region not found.", "id")}
     index, region = found
+    old_x = int(region["shape"]["x"])
+    old_z = int(region["shape"]["z"])
     region["shape"] = dict(region["shape"])
     region["shape"]["x"] = moved_x
     region["shape"]["z"] = moved_z
+    mask = region.get("mask")
+    if isinstance(mask, dict) and isinstance(mask.get("points"), list):
+        shifted = []
+        for point in mask["points"]:
+            px, pz = _point_xz(point)
+            if px is None or pz is None:
+                shifted.append(point)
+                continue
+            moved = {"x": px + (moved_x - old_x), "z": pz + (moved_z - old_z)}
+            shifted.append(moved)
+        mask = dict(mask)
+        mask["points"] = shifted
+        region["mask"] = mask
     project["regions"][index] = region
     return {"result": {"op": "region.move", "regionId": region["id"]}, "error": None}
 

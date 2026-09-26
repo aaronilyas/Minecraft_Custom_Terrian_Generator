@@ -5,12 +5,15 @@ import { Inspector } from "./Inspector";
 import { MapCanvas } from "./MapCanvas";
 import { Preview3D } from "./Preview3D";
 import {
+  BIOMES,
   allowedForDraft,
   errorMessage,
   nextRegionColor,
   nextRegionName,
   parseInteger,
   parseNumber,
+  parsePoints,
+  storageFor,
   textList,
   validationSummary,
 } from "./plan";
@@ -37,6 +40,11 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
   const [moveZ, setMoveZ] = useState("");
   const [generateStatus, setGenerateStatus] = useState("Not generated yet");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [spawnNote, setSpawnNote] = useState("");
+  const [defaultBase, setDefaultBase] = useState("63");
+  const [defaultWater, setDefaultWater] = useState(true);
+  const [defaultBiome, setDefaultBiome] = useState("minecraft:ocean");
   const [previewsReady, setPreviewsReady] = useState(false);
   const [previewToken, setPreviewToken] = useState(0);
   const [shownFingerprint, setShownFingerprint] = useState<string | null>(null);
@@ -112,6 +120,25 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
     };
   }, [project.id, project.generationFingerprint]);
 
+  useEffect(() => {
+    let cancel = false;
+    void api
+      .exportStatus(project.id)
+      .then((body) => {
+        if (cancel || !body.export?.worldDir) return;
+        setExportView({
+          worldDir: body.export.worldDir,
+          summary: validationSummary(body.export.validation),
+        });
+      })
+      .catch(() => {
+        // A missing status route leaves whatever this session already showed.
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [project.id]);
+
   function fail(message: string) {
     setError(message);
     setSaveStatus(message);
@@ -178,12 +205,23 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
     const amplitude = parseInteger(draft.amplitude);
     const roughness = parseNumber(draft.roughness);
     const density = parseNumber(draft.density);
-    if (baseHeight === null || baseHeight < 8 || baseHeight > 180) {
-      fail("Base height must be an integer from 8 to 180.");
+    const warp = parseInteger(draft.warp);
+    const scale = parseInteger(draft.scale);
+    const falloff = draft.falloff.trim() ? parseInteger(draft.falloff) : null;
+    const ceiling = draft.ceiling.trim() ? parseInteger(draft.ceiling) : null;
+    const snowLine = draft.snowLine.trim() ? parseInteger(draft.snowLine) : null;
+    const terrace = parseInteger(draft.terrace);
+    const shore = parseInteger(draft.shore);
+    const cliff = parseInteger(draft.cliff);
+    const crystalDensity = parseNumber(draft.crystalDensity);
+    const crystalRadius = parseInteger(draft.crystalRadius);
+    const crystalHeight = parseInteger(draft.crystalHeight);
+    if (baseHeight === null || baseHeight < 8 || baseHeight > 256) {
+      fail("Base height must be an integer from 8 to 256.");
       return;
     }
-    if (amplitude === null || amplitude < 0 || amplitude > 48) {
-      fail("Amplitude must be an integer from 0 to 48.");
+    if (amplitude === null || amplitude < 0 || amplitude > 96) {
+      fail("Amplitude must be an integer from 0 to 96.");
       return;
     }
     if (roughness === null || roughness < 0 || roughness > 1) {
@@ -194,6 +232,23 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
       fail("Tree density must be a number from 0 to 1.");
       return;
     }
+    if (warp === null || scale === null || terrace === null || shore === null || cliff === null) {
+      fail("Mask and terrain numbers must be integers.");
+      return;
+    }
+    if (draft.falloff.trim() && falloff === null) {
+      fail("Falloff must be an integer or empty.");
+      return;
+    }
+    const points = draft.maskKind === "polygon" ? parsePoints(draft.points) : [];
+    if (points === null || (draft.maskKind === "polygon" && points.length < 3)) {
+      fail("Polygon points need one x z pair per line, at least three.");
+      return;
+    }
+    const strata = draft.strata
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
     await run(async () => {
       const body = await api.operate(project.id, [
         {
@@ -204,18 +259,47 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
             color: draft.color,
             vanillaBiome: draft.biome,
             brief: { text: draft.text, assetIds: draft.assetIds },
+            mask:
+              draft.maskKind === "rect" && warp === 0 && falloff === null
+                ? null
+                : {
+                    kind: draft.maskKind,
+                    warp,
+                    scale,
+                    ...(falloff === null ? {} : { falloff }),
+                    ...(draft.maskKind === "polygon" ? { points } : {}),
+                  },
             palette: {
               surface: draft.surface,
               subsurface: draft.subsurface,
               stone: draft.stone,
               allowed: allowedForDraft(region, draft),
+              strata,
             },
-            terrain: { baseHeight, amplitude, roughness, water: draft.water },
+            terrain: {
+              baseHeight,
+              amplitude,
+              roughness,
+              water: draft.water,
+              style: draft.style,
+              terrace,
+              shore,
+              cliff,
+              ceiling,
+              snowLine,
+            },
             features: {
-              trees: { kind: draft.trees, density },
+              trees: { kind: draft.trees, density, form: draft.treeForm },
               vegetation: draft.vegetation,
               ores: draft.ores,
               caves: draft.caves,
+              food: draft.food,
+              crystals: {
+                enabled: draft.crystals,
+                density: crystalDensity ?? 0.25,
+                radius: crystalRadius ?? 4,
+                height: crystalHeight ?? 10,
+              },
             },
           },
         },
@@ -325,6 +409,11 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
   }
 
   async function finishGenerate(job: Job) {
+    setActiveJobId(null);
+    if (job.status === "cancelled") {
+      setGenerateStatus("Cancelled");
+      return;
+    }
     if (job.status === "error") {
       fail(job.error || job.message || "Generate failed.");
       return;
@@ -332,6 +421,18 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
     generationEpoch.current += 1;
     setGenerateStatus(job.message || "Finished");
     setWarnings(textList(job.result?.warnings));
+    const checks = job.result?.spawnChecks;
+    const spawn = job.result?.spawn;
+    if (spawn && checks) {
+      const failed = Object.entries(checks)
+        .filter(([, ok]) => ok === false)
+        .map(([name]) => name);
+      setSpawnNote(
+        failed.length
+          ? `Spawn ${spawn.x}, ${spawn.y}, ${spawn.z}. Checks still open: ${failed.join(", ")}.`
+          : `Spawn ${spawn.x}, ${spawn.y}, ${spawn.z} passed solid ground, headroom, dry footing, fall, nearby area, and route checks.`,
+      );
+    }
     setError(null);
     setSaveStatus("Saved");
     try {
@@ -349,6 +450,11 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
   }
 
   function finishExport(job: Job) {
+    setActiveJobId(null);
+    if (job.status === "cancelled") {
+      setExportJob({ ...job, message: "Cancelled" });
+      return;
+    }
     if (job.status === "error") {
       fail(job.error || job.message || "Export failed.");
       return;
@@ -374,6 +480,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
     setGenerateStatus("Running");
     try {
       const started = await api.startJob(project.id, { type: "generate", scope: { kind: "all" } });
+      setActiveJobId(started.job.id);
       setGenerateStatus(started.job.message || "Running");
       watchJob("generate", started.job.id);
     } catch (caught) {
@@ -387,6 +494,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
     setExportJob(null);
     try {
       const started = await api.startJob(project.id, { type: "export" });
+      setActiveJobId(started.job.id);
       setExportJob(started.job);
       watchJob("export", started.job.id);
     } catch (caught) {
@@ -451,9 +559,73 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
             <dd>{project.world.seed}</dd>
             <dt>Spawn</dt>
             <dd>
-              {project.world.spawn.x}, {project.world.spawn.z}
+              {project.world.spawn.x}, {project.world.spawn.y}, {project.world.spawn.z}
+            </dd>
+            <dt>Playable</dt>
+            <dd>
+              {project.coverage
+                ? `${project.coverage.playable.minX}…${project.coverage.playable.maxX - 1}`
+                : `${storageFor(project.world.width, project.world.depth)?.playableMin}…${(storageFor(project.world.width, project.world.depth)?.playableMax ?? 1) - 1}`}
+            </dd>
+            <dt>Chunks</dt>
+            <dd>
+              {project.coverage
+                ? `${project.coverage.storage.chunksX}×${project.coverage.storage.chunksZ}, edge ${project.coverage.storage.edgeColumns.west}`
+                : "—"}
             </dd>
           </dl>
+          {spawnNote ? <p className="note">{spawnNote}</p> : null}
+          <h3>Uncovered ground</h3>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const baseHeight = parseInteger(defaultBase);
+              if (baseHeight === null || baseHeight < 8 || baseHeight > 256) {
+                fail("Default base height must be an integer from 8 to 256.");
+                return;
+              }
+              void run(async () => {
+                const body = await api.operate(project.id, [
+                  {
+                    op: "world.set_meta",
+                    args: {
+                      defaultTerrain: {
+                        vanillaBiome: defaultBiome,
+                        terrain: { baseHeight, water: defaultWater },
+                      },
+                    },
+                  },
+                ]);
+                onProject(body.project);
+              });
+            }}
+          >
+            <div className="fields">
+              <label>
+                Biome
+                <select data-testid="default-biome" value={defaultBiome} onChange={(event) => setDefaultBiome(event.target.value)}>
+                  {BIOMES.map((biome) => (
+                    <option key={biome.id} value={biome.id}>
+                      {biome.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Base
+                <input data-testid="default-base" type="number" min={8} max={256} step={1} value={defaultBase} onChange={(event) => setDefaultBase(event.target.value)} />
+              </label>
+              <label className="check">
+                <input data-testid="default-water" type="checkbox" checked={defaultWater} onChange={(event) => setDefaultWater(event.target.checked)} />
+                Water
+              </label>
+            </div>
+            <div className="actions">
+              <button type="submit" data-testid="apply-default">
+                Apply default
+              </button>
+            </div>
+          </form>
           <div className="tool-row" role="group" aria-label="Map tools">
             <button type="button" data-testid="tool-draw" aria-pressed={tool === "draw"} onClick={() => setTool("draw")}>
               Draw
@@ -560,6 +732,16 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
             <button type="button" data-testid="export-world" onClick={() => void exportWorld()}>
               Export world
             </button>
+            <button
+              type="button"
+              data-testid="cancel-job"
+              disabled={!activeJobId}
+              onClick={() => {
+                if (activeJobId) void api.cancelJob(project.id, activeJobId).catch((caught) => fail(errorMessage(caught)));
+              }}
+            >
+              Cancel job
+            </button>
           </div>
           <p data-testid="generate-status">{outOfDate ? "Out of date" : generateStatus}</p>
           <ul data-testid="generate-warnings" className="warnings">
@@ -574,7 +756,9 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
                 alt="Top-down preview"
                 {...(previewsVisible ? { src: previewSrc("topdown") } : {})}
               />
-              <figcaption className="note">Top down</figcaption>
+              <figcaption className="note">
+                Top down{mesh?.previewNote ? ` — ${mesh.previewNote}` : mesh?.step && mesh.step > 1 ? ` — one sample every ${mesh.step} blocks` : ""}
+              </figcaption>
             </figure>
             <figure>
               <img
@@ -587,6 +771,7 @@ export function Editor({ project, blocks, onProject, onBack }: EditorProps) {
           </div>
           <Preview3D
             mesh={visibleMesh}
+            spawn={project.world.spawn}
             blocks={blocks}
             note={
               outOfDate ? "Terrain is out of date. Generate again to refresh the preview." : meshNote

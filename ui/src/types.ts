@@ -13,6 +13,14 @@ export interface Shape {
   depth: number;
 }
 
+export interface RegionMask {
+  kind: string;
+  warp?: number;
+  scale?: number;
+  falloff?: number | null;
+  points?: { x: number; z: number }[];
+}
+
 export interface Asset {
   id: string;
   filename: string;
@@ -28,6 +36,7 @@ export interface Region {
   color: string;
   vanillaBiome: string;
   shape: Shape;
+  mask?: RegionMask;
   brief: { text: string; assetIds: string[] };
   palette: {
     surface: string;
@@ -35,18 +44,27 @@ export interface Region {
     stone: string;
     water: string;
     allowed: string[];
+    strata?: string[];
   };
   terrain: {
     baseHeight: number;
     amplitude: number;
     roughness: number;
     water: boolean;
+    style?: string;
+    ceiling?: number;
+    snowLine?: number | null;
+    terrace?: number;
+    shore?: number;
+    cliff?: number;
   };
   features: {
-    trees: { kind: string; density: number };
+    trees: { kind: string; density: number; form?: string };
     vegetation: string;
     ores: boolean;
     caves: boolean;
+    food?: string;
+    crystals?: { enabled: boolean; density: number; radius: number; height: number };
   };
 }
 
@@ -66,6 +84,19 @@ export interface Project {
   };
   regions: Region[];
   assets: Asset[];
+  coverage?: {
+    playable: { minX: number; minZ: number; maxX: number; maxZ: number; width: number; depth: number };
+    storage: {
+      minX: number;
+      minZ: number;
+      maxX: number;
+      maxZ: number;
+      chunksX: number;
+      chunksZ: number;
+      edgeColumns: { west: number; east: number; north: number; south: number };
+    };
+    edgePolicy?: string;
+  };
 }
 
 export interface ProjectSummary {
@@ -94,6 +125,7 @@ export interface MeshData {
   seaLevel: number;
   heights: number[];
   surface: string[];
+  previewNote?: string;
 }
 
 export interface OperationResult {
@@ -107,6 +139,7 @@ export interface JobResult {
   zipPath?: string;
   dataVersion?: number;
   spawn?: { x: number; y: number; z: number };
+  spawnChecks?: Record<string, boolean>;
   validation?: {
     ok?: boolean;
     dataVersion?: number;
@@ -137,6 +170,8 @@ export interface AgentInfo {
   available?: boolean;
   enabled?: boolean;
   reason?: string | null;
+  imageUnderstanding?: boolean;
+  imageNote?: string;
 }
 
 export interface AgentMessage {
@@ -162,6 +197,8 @@ export interface AgentSession {
   messages?: AgentMessage[];
   pendingPermission?: PendingPermission | null;
   error?: string | null;
+  imageUnderstanding?: boolean;
+  imageNote?: string;
 }
 
 export interface ApiErrorItem {
@@ -190,4 +227,22 @@ export interface RegionDraft {
   ores: boolean;
   caves: boolean;
   biome: string;
+  maskKind: string;
+  warp: string;
+  scale: string;
+  falloff: string;
+  points: string;
+  style: string;
+  ceiling: string;
+  snowLine: string;
+  terrace: string;
+  shore: string;
+  cliff: string;
+  strata: string;
+  treeForm: string;
+  food: string;
+  crystals: boolean;
+  crystalDensity: string;
+  crystalRadius: string;
+  crystalHeight: string;
 }

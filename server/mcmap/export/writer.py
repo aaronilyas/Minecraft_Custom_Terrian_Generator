@@ -16,7 +16,8 @@ import numpy as np
 from nbtlib import Byte, Compound, Double, File, Float, Int, List, Long, LongArray, String
 
 from mcmap.blocks import load_registry
-from mcmap.model import DATA_VERSION, MINECRAFT_VERSION
+from mcmap.generate.terrain import edge_grid
+from mcmap.model import DATA_VERSION, MINECRAFT_VERSION, border_square
 
 Y_MIN = -64
 SECTION_MIN = -4
@@ -122,32 +123,7 @@ def _highest(column: np.ndarray, predicate) -> int:
     return 0
 
 
-def _chunk_bytes(registry, world: dict, cx: int, cz: int, motion_ids: set[int], air_i: int, cave_i: int) -> bytes:
-    block_ids = world["block_ids"]
-    biome_ids = world["biome_ids"]
-    blocks = world["blocks"]
-    biomes = world["biomes"]
-    min_x = int(world["min_x"])
-    min_z = int(world["min_z"])
-    max_x = min_x + blocks.shape[0]
-    max_z = min_z + blocks.shape[1]
-    stored = blocks.shape[2]
-    local = np.full((16, 16, WORLD_HEIGHT), air_i, dtype=np.uint16)
-    local_biome = np.full((16, 16), world["default_biome"], dtype=object)
-    x0 = cx * 16
-    z0 = cz * 16
-    for local_x in range(16):
-        wx = x0 + local_x
-        if wx < min_x or wx >= max_x:
-            continue
-        ix = wx - min_x
-        for local_z in range(16):
-            wz = z0 + local_z
-            if wz < min_z or wz >= max_z:
-                continue
-            iz = wz - min_z
-            local[local_x, local_z, :stored] = blocks[ix, iz]
-            local_biome[local_x, local_z] = biome_ids[int(biomes[ix, iz])]
+def encode_chunk(registry, block_ids: list[str], local: np.ndarray, local_biome: np.ndarray, cx: int, cz: int, motion_ids: set[int], air_i: int, cave_i: int) -> bytes:
     motion = [0] * 256
     surface = [0] * 256
 
@@ -201,6 +177,39 @@ def _chunk_bytes(registry, world: dict, cx: int, cz: int, motion_ids: set[int], 
     buffer = io.BytesIO()
     chunk.write(buffer)
     return buffer.getvalue()
+
+
+def _chunk_bytes(registry, world: dict, cx: int, cz: int, motion_ids: set[int], air_i: int, cave_i: int, project: dict | None = None) -> bytes:
+    block_ids = world["block_ids"]
+    biome_ids = world["biome_ids"]
+    blocks = world["blocks"]
+    biomes = world["biomes"]
+    min_x = int(world["min_x"])
+    min_z = int(world["min_z"])
+    max_x = min_x + blocks.shape[0]
+    max_z = min_z + blocks.shape[1]
+    stored = blocks.shape[2]
+    local = np.full((16, 16, WORLD_HEIGHT), air_i, dtype=np.uint16)
+    local_biome = np.full((16, 16), world["default_biome"], dtype=object)
+    x0 = cx * 16
+    z0 = cz * 16
+    playable = border_square(project) if project is not None else (min_x, min_z, max_x, max_z)
+    needs_edge = x0 < playable[0] or x0 + 16 > playable[2] or z0 < playable[1] or z0 + 16 > playable[3]
+    edge_blocks = edge_biomes = None
+    if needs_edge and project is not None:
+        edge_blocks, edge_biomes = edge_grid(project, x0, z0, block_ids, biome_ids)
+    for local_x in range(16):
+        wx = x0 + local_x
+        for local_z in range(16):
+            wz = z0 + local_z
+            inside_array = min_x <= wx < max_x and min_z <= wz < max_z
+            if inside_array:
+                local[local_x, local_z, :stored] = blocks[wx - min_x, wz - min_z]
+                local_biome[local_x, local_z] = biome_ids[int(biomes[wx - min_x, wz - min_z])]
+            elif edge_blocks is not None:
+                local[local_x, local_z, : edge_blocks.shape[2]] = edge_blocks[local_x, local_z]
+                local_biome[local_x, local_z] = biome_ids[int(edge_biomes[local_x, local_z])]
+    return encode_chunk(registry, block_ids, local, local_biome, cx, cz, motion_ids, air_i, cave_i)
 
 
 def _write_region(path: Path, compressed_by_local: dict[int, bytes]) -> None:
@@ -362,7 +371,7 @@ def write_world(project: dict, world: dict, world_dir: Path) -> None:
     grouped: dict[tuple[int, int], dict[int, bytes]] = defaultdict(dict)
     for cz in range(cz0, cz1 + 1):
         for cx in range(cx0, cx1 + 1):
-            raw = _chunk_bytes(registry, enriched, cx, cz, motion_ids, air_i, cave_i)
+            raw = _chunk_bytes(registry, enriched, cx, cz, motion_ids, air_i, cave_i, project)
             local = (cx & 31) + (cz & 31) * 32
             grouped[(cx >> 5, cz >> 5)][local] = zlib.compress(raw)
     region_dir = world_dir / "region"

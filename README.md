@@ -1,6 +1,6 @@
 # Minecraft Map Studio
 
-A local app for painting finite Minecraft Java survival maps. You set the world size, seed, and spawn, draw custom regions, attach reference images and short briefs, choose real Minecraft blocks, then generate a reproducible terrain and export a Java Edition 1.21.4 world.
+A local app for painting finite Minecraft Java survival maps. You set the world size, seed, and spawn, draw custom regions, attach reference images and short briefs, choose real Minecraft blocks, then generate a reproducible terrain and export a Java Edition 1.21.4 world. Maps can be any integer size from 32 to 4096 on a side, including 3000×3000. Regions can stay rectangular or use an ellipse, warped blob, or polygon. The world border stays the playable size; chunks that hang past that edge are filled only so Minecraft can store them.
 
 Custom regions are map areas with their own shape, materials, and scenery. The exporter does not register new biome ids. It uses a small set of existing vanilla biomes for tint only.
 

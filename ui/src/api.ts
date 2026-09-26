@@ -137,8 +137,18 @@ export const api = {
     return send(projectPath(projectId, `/jobs/${encodeURIComponent(jobId)}`));
   },
 
+  cancelJob(projectId: string, jobId: string): Promise<{ job: Job }> {
+    return send(projectPath(projectId, `/jobs/${encodeURIComponent(jobId)}/cancel`), { method: "POST" });
+  },
+
   generation(projectId: string): Promise<{ generated?: boolean; stale?: boolean; warnings?: unknown }> {
     return send(projectPath(projectId, "/generation"));
+  },
+
+  exportStatus(projectId: string): Promise<{
+    export: { worldDir?: string; validation?: unknown } | null;
+  }> {
+    return send(projectPath(projectId, "/export"));
   },
 
   async mesh(projectId: string): Promise<MeshData | null> {

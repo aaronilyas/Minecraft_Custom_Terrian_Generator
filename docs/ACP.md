@@ -55,7 +55,7 @@ Initialize:
 }
 ```
 
-Then `session/new` with `cwd` set to the project directory and `mcpServers: []`. Grok advertises HTTP/SSE MCP, not stdio MCP, and `promptCapabilities.image` was false. Always send image **paths** and `resource_link` blocks. Send a base64 `image` block only when `promptCapabilities.image` is true and the file is under 1.5 MB.
+Then `session/new` with `cwd` set to the project directory and `mcpServers: []`. Grok advertises HTTP/SSE MCP, not stdio MCP, and `promptCapabilities.image` was false. Always send image **paths** and `resource_link` blocks. Send a base64 `image` block only when `promptCapabilities.image` is true and the file is under 1.5 MB. The agent list and the live session both expose `imageUnderstanding` and `imageNote`. When the capability is false, the prompt says the pixels were not sent and the agent must not claim it inspected the images. Briefs and captions remain the text interpretation.
 
 Every prompt's first text block is:
 

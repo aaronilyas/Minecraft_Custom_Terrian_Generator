@@ -186,6 +186,8 @@ class _Session:
                 "error": self.error,
                 "capabilities": deepcopy(self.capabilities),
                 "stopReason": self.stop_reason,
+                "imageUnderstanding": _image_understanding(self.agent_id, self.capabilities),
+                "imageNote": _image_note(self.agent_id, self.capabilities),
             }
 
     def stderr_text(self) -> str:
@@ -511,6 +513,8 @@ class AgentManager:
             "command": command,
             "args": list(args),
             "enabled": enabled,
+            "imageUnderstanding": _image_understanding(agent_id, None),
+            "imageNote": _image_note(agent_id, None),
         }
 
     def _child_env(self) -> dict[str, str]:
@@ -541,7 +545,7 @@ class AgentManager:
         prompt_caps = (session.capabilities or {}).get("promptCapabilities") or {}
         inline = bool(prompt_caps.get("image")) if isinstance(prompt_caps, dict) else False
         blocks: list[dict] = [
-            {"type": "text", "text": self._instructions(session.project_id, [str(image["path"]) for image in images])},
+            {"type": "text", "text": self._instructions(session.project_id, [str(image["path"]) for image in images], inline)},
             {"type": "text", "text": text},
         ]
         for image in images:
@@ -569,7 +573,7 @@ class AgentManager:
                 )
         return blocks
 
-    def _instructions(self, project_id: str, image_paths: list[str]) -> str:
+    def _instructions(self, project_id: str, image_paths: list[str], inline_images: bool = False) -> str:
         text = (
             "You edit a Minecraft Java 1.21.4 survival map. Change the plan, generate terrain, "
             "or export only by running this argv, not a shell string:\n"
@@ -578,8 +582,19 @@ class AgentManager:
             "\n"
             "Read docs/OPERATIONS.md in the repo. Do not write project.json yourself. "
             "Invalid blocks and coordinates are rejected by the CLI. "
-            "Reference images are listed below as absolute paths."
+            "Reference captions and briefs are text. They do not by themselves change terrain."
         )
+        if inline_images:
+            text += (
+                "\n\nThis session advertised image understanding. Image blocks for the attached references follow. "
+                "Use them only as visual context. Change the map through the command above."
+            )
+        else:
+            text += (
+                "\n\nThis agent did not advertise image understanding (promptCapabilities.image is false). "
+                "The picture pixels were not sent. You have file paths, captions, and briefs only. "
+                "Do not claim you inspected the images."
+            )
         if image_paths:
             text += "\n" + "\n".join(image_paths)
         return text
@@ -755,6 +770,30 @@ class AgentManager:
 
     def _terminal_wait(self, session: _Session, params: dict) -> dict:
         return self._terminal_get(session, params).wait()
+
+
+def _image_understanding(agent_id: str, capabilities: dict | None) -> bool:
+    if isinstance(capabilities, dict):
+        prompt = capabilities.get("promptCapabilities") or {}
+        if isinstance(prompt, dict) and "image" in prompt:
+            return bool(prompt.get("image"))
+    return agent_id == "test"
+
+
+def _image_note(agent_id: str, capabilities: dict | None) -> str:
+    if isinstance(capabilities, dict):
+        understands = _image_understanding(agent_id, capabilities)
+        if understands:
+            return "This session can receive image blocks. The agent is shown the reference pictures."
+        return "This session cannot see image pixels. Briefs, captions, and file paths are sent as text."
+    if agent_id == "grok":
+        return (
+            "Grok's ACP probe advertises promptCapabilities.image as false. "
+            "Reference images are linked by path and described in briefs. The pixels are not sent."
+        )
+    if agent_id == "test":
+        return "The bundled test agent advertises image support unless MCMAP_TEST_AGENT_IMAGE=0."
+    return "Image understanding is unknown until a session starts. Codex stays disabled until data/agents.json enables it."
 
 
 def _initialize_params() -> dict:

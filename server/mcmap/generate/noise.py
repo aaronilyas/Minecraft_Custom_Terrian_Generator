@@ -80,3 +80,13 @@ def cave_density(seed: int, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> n
     low = value_noise_3d_array(seed ^ 0x51, x, y, z, 12)
     high = value_noise_3d_array(seed ^ 0x52, x, y, z, 6)
     return low * 0.65 + high * 0.35
+
+
+def cave_density_volume(seed: int, x_coords: np.ndarray, y_vals: np.ndarray, z_coords: np.ndarray) -> np.ndarray:
+    """Density on a full x/z/y grid. Same noise as cave_density, broadcast over the tile."""
+    x = np.asarray(x_coords, dtype=np.float64)[:, None, None]
+    z = np.asarray(z_coords, dtype=np.float64)[None, :, None]
+    y = np.asarray(y_vals, dtype=np.float64)[None, None, :]
+    low = value_noise_3d_array(seed ^ 0x51, x, y, z, 12)
+    high = value_noise_3d_array(seed ^ 0x52, x, y, z, 6)
+    return low * 0.65 + high * 0.35

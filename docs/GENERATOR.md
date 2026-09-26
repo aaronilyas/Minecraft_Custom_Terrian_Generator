@@ -227,6 +227,10 @@ Region file `r.<cx>>5>.<cz>>5>.mca`: 4096-byte locations, 4096-byte timestamps, 
 
 Write every chunk that intersects the border square.
 
+Columns inside those chunks but outside the playable square are edge columns. Continue the height blend and surface materials there, including water, and do not place caves, ores, trees, plants, crystals, food, or the spawn camp. Keep `BorderSize` equal to the playable size.
+
+Worlds whose playable cell count is above 512×512, or whose `world.storageMode` is `compact`, store heights, owners, and biomes instead of a full block volume. Sampling and export materialize one tile at a time, including a margin so trees, ores, and crystals that cross a tile edge stay deterministic. One project has one running generate or export job. A second start is rejected. Cancel stops the job before the finished fingerprint is published. `mask`, terrain `style`, tree `form`, `food`, and `crystals` are optional. When they are absent, column generation follows the rules above.
+
 ## Tests to add
 
 Use 32×32 or 48×48 projects. Assert:

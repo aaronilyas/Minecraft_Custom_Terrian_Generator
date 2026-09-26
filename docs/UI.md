@@ -8,7 +8,7 @@ Visual direction: a cartographer's desk. Background `#1c1915`, panels `#2a241c`,
 
 Home (`data-testid=home`):
 
-- Create form: `project-name`, `world-width`, `world-depth`, `world-seed`, `spawn-x`, `spawn-z`, submit `submit-project`. Defaults 128, 128, a seed, spawn 0,0. Helper text says the border is the square of the larger side and both sides must be multiples of 16.
+- Create form: `project-name`, `world-width`, `world-depth`, `world-seed`, `spawn-x`, `spawn-z`, submit `submit-project`. Defaults 128, 128, a seed, spawn 0,0. Width and depth are integers from 32 to 4096. Helper text distinguishes the playable border from chunk storage.
 - `open-example` calls `POST /api/projects/import-example`.
 - `project-list` lists saved projects. Each open control is `open-project` with `data-project-id`.
 
