@@ -1,0 +1,181 @@
+{
+  "formatVersion": 1,
+  "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "name": "Coastal Vale",
+  "createdAt": "2026-09-26T15:54:49+00:00",
+  "updatedAt": "2026-09-26T15:54:49+00:00",
+  "minecraft": {
+    "edition": "java",
+    "version": "1.21.4",
+    "dataVersion": 4189
+  },
+  "world": {
+    "width": 128,
+    "depth": 128,
+    "minY": -64,
+    "maxY": 320,
+    "seaLevel": 63,
+    "seed": 424242,
+    "spawn": {
+      "x": 0,
+      "y": 64,
+      "z": 0
+    },
+    "border": {
+      "centerX": 0,
+      "centerZ": 0,
+      "size": 128,
+      "warningBlocks": 5,
+      "warningTime": 15,
+      "damagePerBlock": 0.2,
+      "safeZone": 5
+    }
+  },
+  "blendRadius": 8,
+  "defaultTerrain": {
+    "vanillaBiome": "minecraft:plains",
+    "palette": {
+      "surface": "minecraft:grass_block",
+      "subsurface": "minecraft:dirt",
+      "stone": "minecraft:stone",
+      "water": "minecraft:water",
+      "allowed": [
+        "minecraft:grass_block",
+        "minecraft:dirt",
+        "minecraft:stone",
+        "minecraft:water",
+        "minecraft:sand",
+        "minecraft:oak_log",
+        "minecraft:oak_leaves",
+        "minecraft:short_grass",
+        "minecraft:dandelion",
+        "minecraft:poppy"
+      ]
+    },
+    "terrain": {
+      "baseHeight": 68,
+      "amplitude": 4,
+      "roughness": 0.35,
+      "water": false
+    },
+    "features": {
+      "trees": {
+        "kind": "oak",
+        "density": 0.03
+      },
+      "vegetation": "temperate",
+      "ores": true,
+      "caves": true
+    }
+  },
+  "regions": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Meadow",
+      "color": "#7CB342",
+      "vanillaBiome": "minecraft:plains",
+      "shape": {
+        "x": -52,
+        "z": -40,
+        "width": 48,
+        "depth": 56
+      },
+      "brief": {
+        "text": "A bright temperate meadow that slopes gently toward the water. Oaks are scattered, with grass and a few flowers. Keep the ground walkable and the resources easy to find.",
+        "assetIds": [
+          "33333333-3333-4333-8333-333333333333"
+        ]
+      },
+      "palette": {
+        "surface": "minecraft:grass_block",
+        "subsurface": "minecraft:dirt",
+        "stone": "minecraft:stone",
+        "water": "minecraft:water",
+        "allowed": [
+          "minecraft:grass_block",
+          "minecraft:dirt",
+          "minecraft:stone",
+          "minecraft:water",
+          "minecraft:sand",
+          "minecraft:oak_log",
+          "minecraft:oak_leaves",
+          "minecraft:short_grass",
+          "minecraft:dandelion",
+          "minecraft:poppy"
+        ]
+      },
+      "terrain": {
+        "baseHeight": 70,
+        "amplitude": 5,
+        "roughness": 0.3,
+        "water": false
+      },
+      "features": {
+        "trees": {
+          "kind": "oak",
+          "density": 0.03
+        },
+        "vegetation": "temperate",
+        "ores": true,
+        "caves": true
+      }
+    },
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Dunes",
+      "color": "#E6C36A",
+      "vanillaBiome": "minecraft:desert",
+      "shape": {
+        "x": 12,
+        "z": -28,
+        "width": 40,
+        "depth": 36
+      },
+      "brief": {
+        "text": "Warm sand dunes with cactus and dry scrub. Higher and drier than the meadow, with sandstone under the sand.",
+        "assetIds": [
+          "33333333-3333-4333-8333-333333333333"
+        ]
+      },
+      "palette": {
+        "surface": "minecraft:sand",
+        "subsurface": "minecraft:sandstone",
+        "stone": "minecraft:sandstone",
+        "water": "minecraft:water",
+        "allowed": [
+          "minecraft:sand",
+          "minecraft:sandstone",
+          "minecraft:red_sand",
+          "minecraft:dead_bush",
+          "minecraft:cactus",
+          "minecraft:water"
+        ]
+      },
+      "terrain": {
+        "baseHeight": 74,
+        "amplitude": 8,
+        "roughness": 0.55,
+        "water": false
+      },
+      "features": {
+        "trees": {
+          "kind": "cactus",
+          "density": 0.04
+        },
+        "vegetation": "dry",
+        "ores": true,
+        "caves": true
+      }
+    }
+  ],
+  "assets": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "filename": "33333333-3333-4333-8333-333333333333.png",
+      "caption": "Original painted coast reference",
+      "mime": "image/png",
+      "width": 480,
+      "height": 300
+    }
+  ]
+}
